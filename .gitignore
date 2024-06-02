@@ -1,0 +1,46 @@
+# Python cache (any depth)
+**/__pycache__/
+*.pyc
+*.pyo
+**/.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+._*
+.Spotlight-V100
+.Trashes
+
+# Experiment outputs (large generated files)
+sl_isp_rg_rho_lns/outputs/
+sl_isp_rg_rho_lns/data/experiment_logs/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*~
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Bootstrap script (one-time use)
+_git_setup.py
+
+# Claude Code session working files
+.claude/worktrees/
+.claude/plans/
+.claude/todos/
+.claude/*.jsonl
+.claude/settings.local.json

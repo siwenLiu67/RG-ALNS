@@ -1,0 +1,1213 @@
+%%
+%% Elsevier CAS template-based manuscript draft.
+%% Current version: framework and pre-result writing for SL-ISP.
+
+\documentclass[a4paper,fleqn]{cas-sc}
+
+\usepackage[numbers]{natbib}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{makecell}
+\usepackage{multirow}
+\usepackage{subcaption}
+\usepackage{tabularx}
+\usepackage{xcolor}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\todoresult}[1]{\textcolor{red}{\textit{TODO: #1}}}
+\newcommand{\placeholderfigure}[3]{%
+\begin{figure}
+\centering
+\IfFileExists{#1}{%
+  \includegraphics[width=0.95\linewidth]{#1}%
+}{%
+  \fbox{%
+  \begin{minipage}[c][0.18\textheight][c]{0.90\linewidth}
+  \centering
+  \texttt{\detokenize{#1}}\\[2mm]
+  \todoresult{figure pending; generated file will be inserted here.}
+  \end{minipage}}%
+}
+\caption{#2}
+\label{#3}
+\end{figure}
+}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{observation}{Observation}
+\newdefinition{definition}{Definition}
+\newdefinition{remark}{Remark}
+\newproof{pf}{Proof}
+
+\begin{document}
+\let\WriteBookmarks\relax
+\def\floatpagepagefraction{1}
+\def\textpagefraction{.001}
+
+\shorttitle{Service-Level-Aware Integrated Scheduling}
+\shortauthors{Siwen Liu et~al.}
+
+\title[mode=title]{Service-Level-Aware Integrated Scheduling with No-Regret Recoverability-Guided Rolling-Horizon Large Neighborhood Search}
+
+\author[1]{Siwen Liu}
+\cormark[1]
+\ead{siwenliu@sandau.edu.cn}
+\credit{Conceptualization, Methodology, Software, Writing - Original draft}
+
+\affiliation[1]{organization={School of Information Science and Technology, Sandau University},
+            city={Shanghai},
+            postcode={201209},
+            country={PR China}}
+
+\begin{abstract}
+This manuscript studies the Service-Level-Aware Integrated Scheduling Problem (SL-ISP), in which dynamically released flexible job-shop operations must be coordinated with aggregate service-level commitments of multiple service entities. The setting differs from classical tardiness-oriented shop scheduling because service feasibility depends on entity-level on-time quantity rather than only individual job due-date performance. A compact mixed-integer linear programming (MILP) model is provided as an offline small-instance benchmark and formal reference. To support online scheduling, a structural recoverability analysis is developed through optimistic service-recovery relaxation, recoverable quantity, unavoidable shortfall, recoverability erosion, and mandatory rescue jobs. These results motivate a solver-free No-Regret Recoverability-Guided Rolling-Horizon Large Neighborhood Search (NR-RG-RHO-LNS) algorithm that combines multi-start construction, recoverability-guided candidate diversity, rolling-horizon search, and incumbent preservation under the original objective. The computational section in this version defines the experimental protocol, compared algorithms, metrics, statistical tests, and all table and figure locations. Numerical findings and result-specific conclusions are intentionally left as placeholders until the experimental CSV files and generated figures are available.
+\end{abstract}
+
+\begin{keywords}
+Service-level scheduling \sep Flexible job shop scheduling \sep Integrated scheduling \sep Recoverability analysis \sep Rolling-horizon optimization \sep Large neighborhood search
+\end{keywords}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:introduction}
+
+Instant fulfillment systems increasingly couple short-cycle production, order preparation, and service-level commitments. In such systems, a schedule is not evaluated solely by job completion times. A service entity may tolerate some late jobs if the committed on-time quantity is still met, while a small number of delayed high-quantity jobs may create an entity-level service violation. This feature creates a scheduling problem in which machine-level sequencing decisions and aggregate service-level fulfillment are inseparable.
+
+This study considers the Service-Level-Aware Integrated Scheduling Problem (SL-ISP). Jobs arrive over a finite service window, each job belongs to one service entity, and each job consists of a sequence of flexible operations. After production completion, an entity-specific deterministic transportation delay is added before the job is counted against the entity cutoff time. Each entity has a required fulfillment ratio and a weight. The objective combines total tardiness (TT) and weighted service shortfall (WSF), and thus captures both continuous delivery delay and aggregate service-level violation.
+
+The problem is related to integrated production and distribution scheduling, flexible job-shop scheduling, and dynamic rolling-horizon control. However, the service-level structure studied here is not an explicit vehicle-routing layer. Transportation delay is treated as a deterministic entity-level lead-time abstraction, while the main operational coupling occurs between shop-floor capacity and entity-level on-time quantity. This distinction is important: adding a routing layer would change the decision space, whereas SL-ISP focuses on how production schedules should anticipate service fulfillment thresholds.
+
+The final algorithmic framework is No-Regret Recoverability-Guided Rolling-Horizon Large Neighborhood Search (NR-RG-RHO-LNS). It is designed as a solver-free heuristic for large dynamic instances, not as an exact optimizer. The main idea is to use lightweight recoverability indicators to produce service-risk-aware candidate diversity, while a no-regret selection rule prevents recoverability-guided candidates from being forced into the incumbent unless they improve the original objective \(Z\).
+
+The main contributions are as follows.
+\begin{enumerate}
+    \item A unified SL-ISP formulation is developed with flexible operations, entity-specific transportation delays, fulfillment-ratio commitments, and a composite tardiness-shortfall objective.
+    \item A compact MILP is given as an offline small-instance benchmark and formal reference model, with sequencing variables introduced only for operation pairs that can share a machine.
+    \item Structural recoverability results are derived, including optimistic recoverable quantity, unavoidable shortfall, recoverability erosion, and mandatory rescue jobs.
+    \item A solver-free NR-RG-RHO-LNS framework is proposed, combining no-regret multi-start initialization, recoverability-guided candidate generation, rolling-horizon large neighborhood search, and incumbent preservation.
+    \item A full computational protocol is specified with 13 compared algorithms, matched seeds, equal schedule-evaluation budgets for iterative methods, paired statistical tests, ablation analysis, scalability analysis, convergence curves, and a Gantt-chart illustration. Result-specific interpretations are deferred until the experimental outputs are generated.
+\end{enumerate}
+
+\section{Literature review}
+\label{sec:literature}
+
+\subsection{Integrated production and service-level scheduling}
+\label{sec:lit_ipds}
+
+Integrated production and distribution scheduling has been studied across supply-chain, manufacturing, and time-window fulfillment contexts. Existing models often combine shop or flow-shop production with outbound delivery decisions, customer time windows, and earliness-tardiness penalties \citep{sawik_integrated_2016,hou_modelling_2022}. Recent studies further consider distributed flexible job shops and transportation coordination, typically using evolutionary or memetic algorithms for large instances \citep{zhang_cooperative_2024,zhao_learning-driven_2025,jia_learning-and-knowledge-assisted_2025}.
+
+The SL-ISP differs from these settings in two respects. First, service feasibility is measured by an aggregate fulfillment ratio at the service-entity level, not by a customer-by-customer routing schedule. Second, the distribution component is represented by deterministic entity-level transportation delays, so the central decision is production sequencing under service-level commitments. This abstraction is appropriate when the downstream lead time is stable enough to be represented as an entity-level delay and the main operational bottleneck lies in production or order-preparation capacity.
+
+\subsection{Flexible job-shop and event-driven scheduling}
+\label{sec:lit_fjsp}
+
+Flexible job-shop scheduling extends classical job-shop scheduling by allowing each operation to choose among eligible machines. The resulting assignment-sequencing interaction substantially enlarges the search space. Recent work has explored learning-based and simulation-based approaches for flexible or dynamic shop scheduling, including deep reinforcement learning for flexible job shops \citep{yuan_solving_2024}, dynamic parallel-machine scheduling \citep{liu2023dynamic}, and hierarchical multi-action policies for dynamic distributed job shops with arrivals \citep{huang2024hierarchical}.
+
+Dynamic arrivals make event-driven rescheduling necessary. In SL-ISP, decision epochs are aligned with job releases, operation completions, and machine-idle events. This event-driven structure avoids solving a full static problem whenever the state changes, but it also requires the scheduler to diagnose whether the remaining service commitment is still recoverable. The recoverability analysis in Section~\ref{sec:recoverability} is introduced for this purpose.
+
+\subsection{Metaheuristic and rolling-horizon methods}
+\label{sec:lit_metaheuristics}
+
+Metaheuristics remain important for large scheduling problems because exact formulations become computationally expensive as sequencing decisions grow. Memetic algorithms, variable neighborhood search, tabu search, and hybrid evolutionary frameworks have been widely used in scheduling and integrated production-distribution problems \citep{burke2005design,arora2016meta,hou_knowledge-driven_2023}. Rolling-horizon optimization (RHO) decomposes a dynamic problem into shorter decision windows, while large neighborhood search (LNS) repairs selected portions of an incumbent schedule.
+
+For SL-ISP, a direct exact rolling-horizon solver would be difficult to scale because each local subproblem inherits flexible machine assignment, precedence, non-preemption, and service-level shortfall coupling. The proposed algorithm therefore uses a solver-free RHO-LNS backbone. Recoverability-guided (RG) information is used to diversify construction and repair candidates, but all acceptance and final selection decisions are made using the original objective \(Z\).
+
+\subsection{Research gaps and positioning of this study}
+\label{sec:lit_gaps}
+
+Three gaps motivate this work. First, most integrated production-distribution models either include explicit routing decisions or use job-level due-date penalties; fewer formulations isolate aggregate service-level fulfillment as the main coupling structure. Second, dynamic flexible scheduling studies often optimize tardiness or makespan, while entity-level fulfillment ratios require a different diagnosis of residual risk. Third, metaheuristic rolling-horizon approaches usually rely on generic neighborhoods; they do not explicitly identify when a service entity is fragile, unrecoverable, or dependent on mandatory rescue jobs.
+
+This study addresses these gaps by formulating SL-ISP, deriving structural recoverability indicators, and embedding those indicators in a no-regret RHO-LNS algorithm. The resulting method is positioned as a scalable heuristic framework for service-level-aware integrated scheduling, with the MILP used only for formal reference and small-instance benchmarking.
+
+\section{Problem description and mathematical formulation}
+\label{sec:problem}
+
+\subsection{Problem description}
+\label{sec:problem_description}
+
+Before presenting the model, Table~\ref{tab:abbreviations} lists the abbreviations used throughout the manuscript and Table~\ref{tab:notation} summarizes the main notation. Algorithmic operator names and experiment-only fields are intentionally excluded from the notation table.
+
+\begin{table}[!t]
+\centering
+\caption{Abbreviations.}
+\label{tab:abbreviations}
+\small
+\begin{tabularx}{\textwidth}{lY}
+\toprule
+\textbf{Abbreviation} & \textbf{Meaning} \\
+\midrule
+SL-ISP & Service-Level-Aware Integrated Scheduling Problem \\
+NR-RG-RHO-LNS & No-Regret Recoverability-Guided Rolling-Horizon Large Neighborhood Search \\
+RHO & Rolling-horizon optimization \\
+LNS & Large neighborhood search \\
+RG & Recoverability-guided \\
+EDF & Earliest deadline first \\
+EDD & Earliest due date \\
+SPT & Shortest processing time \\
+WSPT & Weighted shortest processing time \\
+ATC & Apparent tardiness cost \\
+ILS & Iterated local search \\
+VNS & Variable neighborhood search \\
+TS & Tabu search \\
+TT & Total tardiness \\
+WSF & Weighted service shortfall \\
+ZSR & Zero-shortfall entity rate \\
+MILP & Mixed-integer linear programming \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[!t]
+\centering
+\caption{Notation for SL-ISP and recoverability analysis.}
+\label{tab:notation}
+\small
+\begin{tabularx}{\textwidth}{lY}
+\toprule
+\textbf{Symbol} & \textbf{Definition} \\
+\midrule
+\multicolumn{2}{l}{\textit{Sets}}\\
+\(\mathcal J\) & Set of jobs. \\
+\(\mathcal M\) & Set of machines. \\
+\(\mathcal R\) & Set of service entities. \\
+\(\mathcal O_j\) & Ordered set of operations of job \(j\). \\
+\(\mathcal M_{jo}\) & Eligible machines of operation \(O_{jo}\). \\
+\(\mathcal A\) & Set of all operations, \(\mathcal A=\{(j,o):j\in\mathcal J,o\in\mathcal O_j\}\). \\
+\(\mathcal P_h\) & Operation pairs that can compete for machine \(h\). \\
+\midrule
+\multicolumn{2}{l}{\textit{Parameters}}\\
+\(r_j\) & Release time of job \(j\). \\
+\(p_{joh}\) & Processing time of operation \(O_{jo}\) on machine \(h\). \\
+\(q_j\) & Quantity contribution of job \(j\). \\
+\(g(j)\) & Service-entity mapping of job \(j\). \\
+\(d_r\) & Service cutoff time of entity \(r\). \\
+\(\tau_r\) & Deterministic transportation delay of entity \(r\). \\
+\(\rho_r\) & Required fulfillment ratio of entity \(r\). \\
+\(w_r\) & Weight of entity \(r\). \\
+\(Q_r\) & Total quantity of entity \(r\), \(Q_r=\sum_{j:g(j)=r}q_j\). \\
+\(Q_r^{\min}\) & Minimum required on-time quantity, \(Q_r^{\min}=\rho_rQ_r\). \\
+\(\alpha,\beta\) & Objective weights for tardiness and weighted shortfall. \\
+\(H\) & Scheduling horizon and Big-M constant. \\
+\midrule
+\multicolumn{2}{l}{\textit{Decision variables and derived schedule quantities}}\\
+\(S_{jo}\) & Start time of operation \(O_{jo}\). \\
+\(C_j\) & Production completion time of job \(j\). \\
+\(D_j\) & Delivery time of job \(j\). \\
+\(T_j\) & Tardiness of job \(j\). \\
+\(z_j\) & On-time indicator of job \(j\). \\
+\(Q_r^{on}\) & On-time quantity delivered for entity \(r\). \\
+\(U_r\) & Entity-level service shortfall. \\
+\(X_{joh}\) & Binary assignment variable equal to 1 if \(O_{jo}\) is assigned to machine \(h\). \\
+\(Y_{jo,iqh}\) & Binary sequencing variable for two operations on machine \(h\). \\
+\midrule
+\multicolumn{2}{l}{\textit{Recoverability terms}}\\
+\(t\) & Current decision time. \\
+\(Q_r^{sec}(t)\) & Secured on-time quantity of entity \(r\) at time \(t\). \\
+\(Q_r^{rem}(t)\) & Remaining required quantity of entity \(r\) at time \(t\). \\
+\(\underline D_j(t)\) & Optimistic lower bound on delivery time of job \(j\) from time \(t\). \\
+\(\mathcal E_r(t)\) & Jobs of entity \(r\) that can optimistically meet \(d_r\). \\
+\(\mathcal B\) & Bottleneck resource pool used in the recoverability relaxation. \\
+\(\mathrm{Cap}_{\mathcal B}(t,d_r)\) & Available capacity of \(\mathcal B\) before \(d_r\). \\
+\(Q_{r,\mathcal B}^{rec}(t)\) & Maximum recoverable on-time quantity under the optimistic relaxation. \\
+\(U_{r,\mathcal B}(t)\) & Unavoidable shortfall lower bound under the optimistic relaxation. \\
+\(S_{r,\mathcal B}^{rec}(t)\) & Recoverability surplus, \(Q_{r,\mathcal B}^{rec}(t)-Q_r^{rem}(t)\). \\
+\(\Delta_{j,r,\mathcal B}^{rec}(t)\) & Marginal recoverability contribution of job \(j\). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+SL-ISP is defined over a finite service window. A set of jobs \(\mathcal J\) must be processed on a set of flexible machines \(\mathcal M\) while satisfying service commitments for a set of service entities \(\mathcal R\). Each job \(j\in\mathcal J\) is assigned to exactly one service entity through the mapping \(g(j)\in\mathcal R\).
+
+Job \(j\) has a release time \(r_j\), a quantity contribution \(q_j\), and an ordered operation sequence \(\mathcal O_j=\{1,\ldots,n_j\}\). Operation \(O_{jo}\) can be processed on one eligible machine \(h\in\mathcal M_{jo}\), and its processing time on that machine is \(p_{joh}\). Operations of the same job must follow their given precedence order, and each operation is non-preemptive. A machine can process at most one operation at a time.
+
+Each service entity \(r\in\mathcal R\) has a service cutoff time \(d_r\), deterministic transportation delay \(\tau_r\), required fulfillment ratio \(\rho_r\), and weight \(w_r\). The delay \(\tau_r\) is an entity-level lead-time abstraction and does not represent explicit vehicle routing or batching. The aggregate quantity and minimum required on-time quantity are
+\begin{equation}
+Q_r=\sum_{j:g(j)=r}q_j,
+\qquad
+Q_r^{\min}=\rho_rQ_r.
+\label{eq:quantity_requirement}
+\end{equation}
+
+Let \(C_j\) be the production completion time of the final operation of job \(j\). The delivery time is
+\begin{equation}
+D_j=C_j+\tau_{g(j)}.
+\label{eq:delivery_time}
+\end{equation}
+Job \(j\) is on time if \(D_j\le d_{g(j)}\), which is represented by \(z_j\). Its tardiness is
+\begin{equation}
+T_j=[D_j-d_{g(j)}]_+,
+\label{eq:tardiness_definition}
+\end{equation}
+where \([x]_+=\max\{0,x\}\). The on-time quantity and service shortfall of entity \(r\) are
+\begin{align}
+Q_r^{on}&=\sum_{j:g(j)=r}q_jz_j,
+\label{eq:on_time_quantity}\\
+U_r&=[Q_r^{\min}-Q_r^{on}]_+.
+\label{eq:shortfall_definition}
+\end{align}
+
+The system is rescheduled in an event-driven manner. Decision epochs are aligned with job-release events, operation-completion events, and machine-idle events. At each epoch, the schedule state is updated and feasible ready operations may be assigned to idle machines. The objective is
+\begin{equation}
+\min Z=\alpha\sum_{j\in\mathcal J}T_j+\beta\sum_{r\in\mathcal R}w_rU_r.
+\label{eq:objective}
+\end{equation}
+The ratio \(\beta/\alpha\) represents the relative objective emphasis on service shortfall versus tardiness; it is not treated as a separate service-pressure parameter in the model.
+
+\subsection{Mathematical programming model}
+\label{sec:milp}
+
+This subsection provides a MILP formulation for a fully revealed service window. The formulation is an offline benchmark and formal reference model. It is not the large-scale solution method used in the computational study; the proposed NR-RG-RHO-LNS algorithm in Section~\ref{sec:algorithm} is solver-free.
+
+Define the operation set
+\begin{equation}
+\mathcal A=\{(j,o):j\in\mathcal J,\;o\in\mathcal O_j\},
+\label{eq:operation_set}
+\end{equation}
+and, for each machine \(h\in\mathcal M\), define the pair set
+\begin{equation}
+\mathcal P_h=
+\{((j,o),(i,q)):(j,o)<_{\mathrm{lex}}(i,q),\;
+h\in\mathcal M_{jo}\cap\mathcal M_{iq}\}.
+\label{eq:pair_set}
+\end{equation}
+The lexicographic order is arbitrary and is used only to avoid duplicate operation pairs. Sequencing variables are introduced only for \(\mathcal P_h\), i.e., only when two operations can compete for the same machine.
+
+The offline MILP is
+\begin{equation}
+\min Z
+=
+\alpha\sum_{j\in\mathcal J}T_j
++\beta\sum_{r\in\mathcal R}w_rU_r
+\label{eq:milp_obj}
+\end{equation}
+subject to
+\begin{align}
+&\sum_{h\in\mathcal M_{jo}}X_{joh}=1,
+&&\forall j\in\mathcal J,\;o\in\mathcal O_j,
+\label{eq:milp_assignment}\\
+&S_{j1}\ge r_j,
+&&\forall j\in\mathcal J,
+\label{eq:milp_release}\\
+&S_{j,o+1}\ge S_{jo}+\sum_{h\in\mathcal M_{jo}}p_{joh}X_{joh},
+&&\forall j\in\mathcal J,\;o=1,\ldots,n_j-1,
+\label{eq:milp_precedence}\\
+&S_{jo}+p_{joh}\le S_{iq}
++H(3-X_{joh}-X_{iqh}-Y_{jo,iqh}),
+&&\forall h\in\mathcal M,\;((j,o),(i,q))\in\mathcal P_h,
+\label{eq:milp_nonoverlap_1}\\
+&S_{iq}+p_{iqh}\le S_{jo}
++H(2-X_{joh}-X_{iqh}+Y_{jo,iqh}),
+&&\forall h\in\mathcal M,\;((j,o),(i,q))\in\mathcal P_h,
+\label{eq:milp_nonoverlap_2}\\
+&C_j=S_{j,n_j}+\sum_{h\in\mathcal M_{j,n_j}}p_{j,n_j,h}X_{j,n_j,h},
+&&\forall j\in\mathcal J,
+\label{eq:milp_completion}\\
+&D_j=C_j+\tau_{g(j)},
+&&\forall j\in\mathcal J,
+\label{eq:milp_delivery}\\
+&T_j\ge D_j-d_{g(j)},
+&&\forall j\in\mathcal J,
+\label{eq:milp_tardiness}\\
+&D_j\le d_{g(j)}+H(1-z_j),
+&&\forall j\in\mathcal J,
+\label{eq:milp_ontime_1}\\
+&D_j\ge d_{g(j)}+\epsilon-Hz_j,
+&&\forall j\in\mathcal J,
+\label{eq:milp_ontime_2}\\
+&U_r\ge \rho_rQ_r-\sum_{j:g(j)=r}q_jz_j,
+&&\forall r\in\mathcal R,
+\label{eq:milp_shortfall}\\
+&X_{joh}\in\{0,1\},
+&&\forall j\in\mathcal J,\;o\in\mathcal O_j,\;h\in\mathcal M_{jo},
+\label{eq:milp_domain_x}\\
+&Y_{jo,iqh}\in\{0,1\},
+&&\forall h\in\mathcal M,\;((j,o),(i,q))\in\mathcal P_h,
+\label{eq:milp_domain_y}\\
+&z_j\in\{0,1\},
+&&\forall j\in\mathcal J,
+\label{eq:milp_domain_z}\\
+&S_{jo},C_j,D_j,T_j\ge0,
+&&\forall j\in\mathcal J,\;o\in\mathcal O_j,
+\label{eq:milp_domain_time}\\
+&U_r\ge0,
+&&\forall r\in\mathcal R.
+\label{eq:milp_domain_shortfall}
+\end{align}
+
+Constraints~\eqref{eq:milp_assignment}--\eqref{eq:milp_precedence} model machine assignment, release times, and within-job precedence. Constraints~\eqref{eq:milp_nonoverlap_1}--\eqref{eq:milp_nonoverlap_2} enforce non-overlap only for operation pairs in \(\mathcal P_h\). Constraints~\eqref{eq:milp_completion}--\eqref{eq:milp_tardiness} define completion, delivery, and tardiness. Constraints~\eqref{eq:milp_ontime_1}--\eqref{eq:milp_ontime_2} make \(z_j\) an exact on-time indicator: \(z_j=1\) if and only if job \(j\) is delivered by the service cutoff of its entity. The constant \(\epsilon>0\) separates on-time and late delivery; in the integer-time implementation used for the exact CP-SAT reference solver, \(\epsilon=1\). Constraint~\eqref{eq:milp_shortfall} linearizes the continuous service shortfall \(U_r=[\rho_rQ_r-\sum_{j:g(j)=r}q_jz_j]_+\). Constraints~\eqref{eq:milp_domain_x}--\eqref{eq:milp_domain_shortfall} give the complete variable domains.
+
+The number of pairwise sequencing variables grows with the number of machine-compatible operation pairs. Consequently, the MILP is suitable mainly for small offline benchmarks and model validation. Large dynamic instances are handled by the solver-free NR-RG-RHO-LNS algorithm.
+
+\subsection{Complexity and motivation for heuristic solution}
+\label{sec:complexity}
+
+A central structural question is whether zero shortfall can be attained for a given instance. Even a highly restricted version of SL-ISP is computationally intractable.
+
+\begin{definition}[Restricted zero-shortfall service fulfillment problem]
+\label{def:rzssfp}
+An instance of the restricted zero-shortfall service fulfillment problem consists of one service entity, one machine, single-operation jobs released at time zero, zero transportation delay, and a common cutoff \(d\). Each job \(j\in\mathcal J\) has processing time \(p_j\) and quantity \(q_j\). Given a required on-time quantity \(Q\), the question is whether there exists a subset of jobs whose total processing time is at most \(d\) and whose total quantity is at least \(Q\).
+\end{definition}
+
+\begin{theorem}[Complexity of zero-shortfall verification]
+\label{thm:np_complete}
+The restricted zero-shortfall service fulfillment problem is NP-complete.
+\end{theorem}
+
+\begin{pf}
+Membership in NP is immediate. A certificate is a subset \(S\subseteq\mathcal J\). Verifying \(\sum_{j\in S}p_j\le d\) and \(\sum_{j\in S}q_j\ge Q\) requires \(O(|\mathcal J|)\) time.
+
+For NP-hardness, reduce from the 0-1 knapsack decision problem. Given items with weights \(a_i\), values \(b_i\), capacity \(A\), and target value \(B\), construct one job for each item with processing time \(p_j=a_i\) and quantity \(q_j=b_i\). Set the common cutoff to \(d=A\), set the required on-time quantity to \(Q=B\), use one machine, set all release times to zero, and set the transportation delay to zero. In this single-machine setting, a selected set of jobs completes by the cutoff if and only if the corresponding item set has total weight at most \(A\), and its delivered quantity reaches the service requirement if and only if the corresponding item set has value at least \(B\). Thus the knapsack instance is feasible if and only if the constructed scheduling instance admits zero shortfall. The transformation is polynomial, so the restricted problem is NP-hard. Together with membership in NP, it is NP-complete.
+\end{pf}
+
+Theorem~\ref{thm:np_complete} justifies heuristic solution for large SL-ISP instances and motivates recoverability indicators that are cheaper than exact zero-shortfall verification.
+
+\section{Structural recoverability analysis}
+\label{sec:recoverability}
+
+\subsection{Optimistic recoverability relaxation}
+\label{sec:optimistic_recoverability}
+
+To support event-driven diagnosis, we use an optimistic relaxation that ignores future sequencing interference except for capacity consumed by a designated bottleneck resource pool \(\mathcal B\subseteq\mathcal M\). In the structural results below, \(\mathcal B\) is interpreted as an unavoidable capacity pool for the selected recovery workload, so the workload term defined in \eqref{eq:min_bottleneck_work} is a valid lower bound on the pool capacity required by a selected job subset. At decision time \(t\), the secured on-time quantity of entity \(r\) is
+\begin{equation}
+Q_r^{sec}(t)=
+\sum_{\substack{j:g(j)=r\\ C_j\le t,\;D_j\le d_r}}q_j,
+\label{eq:secured_quantity}
+\end{equation}
+and the remaining required quantity is
+\begin{equation}
+Q_r^{rem}(t)=
+[Q_r^{\min}-Q_r^{sec}(t)]_+.
+\label{eq:remaining_quantity}
+\end{equation}
+
+For an unfinished job \(j\), let \(\mathcal O_j^{rem}(t)\) denote its remaining operations, with residual processing used for an ongoing non-preemptive operation. An optimistic delivery-time lower bound is
+\begin{equation}
+\underline D_j(t)=
+\max\{t,r_j\}
++
+\sum_{o\in\mathcal O_j^{rem}(t)}
+\min_{h\in\mathcal M_{jo}}p_{joh}
++
+\tau_{g(j)}.
+\label{eq:opt_delivery}
+\end{equation}
+This bound assumes zero waiting and the fastest eligible machine for each remaining operation. The eligible recovery set is
+\begin{equation}
+\mathcal E_r(t)=
+\{j\in\mathcal J:g(j)=r,\;j\ \text{not secured at }t,\;\underline D_j(t)\le d_r\}.
+\label{eq:eligible_set}
+\end{equation}
+
+Let \(\mathrm{Cap}_{\mathcal B}(t,d_r)\) be the aggregate available capacity of \(\mathcal B\) during \([t,d_r]\), net of already committed non-preemptive work. For job \(j\), define its minimum bottleneck workload
+\begin{equation}
+\underline w_{j,\mathcal B}(t)=
+\sum_{o\in\mathcal O_j^{rem}(t)}
+\min_{h\in\mathcal B\cap\mathcal M_{jo}}p_{joh},
+\label{eq:min_bottleneck_work}
+\end{equation}
+with the convention that \(\min_{h\in\emptyset}p_{joh}=0\). This term is an optimistic lower bound on the bottleneck-pool workload counted for job \(j\) in the relaxation.
+
+The minimum-workload recovery problem asks how much bottleneck workload is needed to assemble the remaining required quantity:
+\begin{equation}
+W_{r,\mathcal B}^{\min}(t)=
+\min
+\sum_{j\in\mathcal E_r(t)}
+\underline w_{j,\mathcal B}(t)y_j
+\label{eq:min_workload}
+\end{equation}
+subject to
+\begin{equation}
+\sum_{j\in\mathcal E_r(t)}q_jy_j\ge Q_r^{rem}(t),
+\qquad
+y_j\in\{0,1\}.
+\label{eq:min_workload_quantity}
+\end{equation}
+If no subset of \(\mathcal E_r(t)\) meets the quantity requirement, set \(W_{r,\mathcal B}^{\min}(t)=+\infty\).
+
+The maximum recoverable quantity problem is
+\begin{equation}
+Q_{r,\mathcal B}^{rec}(t)=
+\max
+\sum_{j\in\mathcal E_r(t)}q_jx_j
+\label{eq:recoverable_quantity}
+\end{equation}
+subject to
+\begin{equation}
+\sum_{j\in\mathcal E_r(t)}
+\underline w_{j,\mathcal B}(t)x_j
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r),
+\qquad
+x_j\in\{0,1\}.
+\label{eq:recoverable_capacity}
+\end{equation}
+The selectors \(x_j\) and \(y_j\) are local variables of the relaxation. The two problems form a dual pair of 0-1 knapsack views: one minimizes workload for a quantity target, and the other maximizes quantity under a workload budget.
+
+\subsection{Recoverable quantity and unavoidable shortfall}
+\label{sec:recoverable_shortfall}
+
+\begin{theorem}[Equivalent characterizations of optimistic zero-shortfall recoverability]
+\label{thm:dual_knapsack}
+For any entity \(r\in\mathcal R\) at decision time \(t\),
+\begin{equation}
+W_{r,\mathcal B}^{\min}(t)\le \mathrm{Cap}_{\mathcal B}(t,d_r)
+\quad\Longleftrightarrow\quad
+Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t).
+\label{eq:dual_knapsack_equivalence}
+\end{equation}
+\end{theorem}
+
+\begin{pf}
+First assume \(W_{r,\mathcal B}^{\min}(t)\le \mathrm{Cap}_{\mathcal B}(t,d_r)\). Let \(y^*\) be an optimal solution of \eqref{eq:min_workload}--\eqref{eq:min_workload_quantity}. Then
+\[
+\sum_{j\in\mathcal E_r(t)}
+\underline w_{j,\mathcal B}(t)y_j^*
+=
+W_{r,\mathcal B}^{\min}(t)
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r),
+\]
+and \(\sum_{j\in\mathcal E_r(t)}q_jy_j^*\ge Q_r^{rem}(t)\). Setting \(x_j=y_j^*\) gives a feasible solution to \eqref{eq:recoverable_quantity}--\eqref{eq:recoverable_capacity} with value at least \(Q_r^{rem}(t)\). Hence \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\).
+
+Conversely, assume \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\). Let \(x^*\) be an optimal solution of \eqref{eq:recoverable_quantity}--\eqref{eq:recoverable_capacity}. It satisfies
+\[
+\sum_{j\in\mathcal E_r(t)}q_jx_j^*
+=Q_{r,\mathcal B}^{rec}(t)
+\ge Q_r^{rem}(t)
+\]
+and
+\[
+\sum_{j\in\mathcal E_r(t)}
+\underline w_{j,\mathcal B}(t)x_j^*
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r).
+\]
+Setting \(y_j=x_j^*\) gives a feasible solution to \eqref{eq:min_workload}--\eqref{eq:min_workload_quantity}. Therefore
+\[
+W_{r,\mathcal B}^{\min}(t)
+\le
+\sum_{j\in\mathcal E_r(t)}
+\underline w_{j,\mathcal B}(t)x_j^*
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r).
+\]
+Both directions hold.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: Theorem~\ref{thm:dual_knapsack} provides two equivalent online diagnoses, enabling either a workload-fit view or a recoverable-quantity view when generating RG candidates.
+
+The unavoidable shortfall lower bound induced by the optimistic relaxation is
+\begin{equation}
+U_{r,\mathcal B}(t)=
+[Q_r^{rem}(t)-Q_{r,\mathcal B}^{rec}(t)]_+.
+\label{eq:unavoidable_shortfall}
+\end{equation}
+
+\begin{theorem}[Unavoidable shortfall lower bound]
+\label{thm:unavoidable_shortfall}
+For any feasible continuation schedule \(\pi\) from time \(t\), the realized shortfall of entity \(r\) satisfies
+\begin{equation}
+U_r^\pi\ge U_{r,\mathcal B}(t).
+\label{eq:shortfall_bound}
+\end{equation}
+\end{theorem}
+
+\begin{pf}
+Let \(\mathcal J_r^{on}(\pi)\subseteq\mathcal E_r(t)\) be the set of entity-\(r\) jobs that are not secured at time \(t\) but are delivered on time under continuation \(\pi\). Every such job must complete its remaining operations, and the total bottleneck workload assigned to \(\mathcal B\) before \(d_r\) cannot exceed \(\mathrm{Cap}_{\mathcal B}(t,d_r)\). Therefore,
+\[
+\sum_{j\in\mathcal J_r^{on}(\pi)}
+\underline w_{j,\mathcal B}(t)
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r).
+\]
+The indicator vector of \(\mathcal J_r^{on}(\pi)\) is feasible for \eqref{eq:recoverable_quantity}--\eqref{eq:recoverable_capacity}; hence
+\[
+\sum_{j\in\mathcal J_r^{on}(\pi)}q_j
+\le
+Q_{r,\mathcal B}^{rec}(t).
+\]
+The total on-time quantity under \(\pi\) is \(Q_r^{sec}(t)+\sum_{j\in\mathcal J_r^{on}(\pi)}q_j\), so
+\begin{align}
+U_r^\pi
+&=
+\left[
+Q_r^{\min}
+-Q_r^{sec}(t)
+-\sum_{j\in\mathcal J_r^{on}(\pi)}q_j
+\right]_+
+\nonumber\\
+&=
+\left[
+Q_r^{rem}(t)
+-\sum_{j\in\mathcal J_r^{on}(\pi)}q_j
+\right]_+
+\nonumber\\
+&\ge
+[Q_r^{rem}(t)-Q_{r,\mathcal B}^{rec}(t)]_+
+=U_{r,\mathcal B}(t),
+\nonumber
+\end{align}
+where the inequality follows from monotonicity of \([\cdot]_+\).
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: \(U_{r,\mathcal B}(t)\) gives a certificate of residual service risk that is valid for all feasible continuations of the current schedule state.
+
+\begin{corollary}[Unattainability of zero shortfall]
+\label{cor:unattainable}
+If \(Q_{r,\mathcal B}^{rec}(t)<Q_r^{rem}(t)\), then \(U_r^\pi>0\) for every feasible continuation schedule \(\pi\).
+\end{corollary}
+
+\begin{pf}
+The condition \(Q_{r,\mathcal B}^{rec}(t)<Q_r^{rem}(t)\) implies \(U_{r,\mathcal B}(t)>0\). The claim follows directly from Theorem~\ref{thm:unavoidable_shortfall}.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: the algorithm can avoid treating zero shortfall for such an entity as an enforceable target, while still using recoverability information to construct service-risk-aware candidate diversity.
+
+\subsection{Recoverability erosion}
+\label{sec:recoverability_erosion}
+
+Recoverability is time-sensitive because capacity consumption and shrinking slack can reduce the set of recoverable jobs. The following result restores the monotonic erosion statement under the same conditions used in the original structural analysis.
+
+\begin{theorem}[Recoverability erosion under non-recovery capacity consumption]
+\label{thm:erosion}
+Let \(t_1<t_2\) be two decision epochs. Suppose that, for entity \(r\),
+\begin{enumerate}
+    \item[(C1)] \(Q_r^{rem}(t_2)=Q_r^{rem}(t_1)\);
+    \item[(C2)] \(\mathcal E_r(t_2)\subseteq\mathcal E_r(t_1)\);
+    \item[(C3)] \(\underline w_{j,\mathcal B}(t_2)\ge \underline w_{j,\mathcal B}(t_1)\) for all \(j\in\mathcal E_r(t_2)\);
+    \item[(C4)] \(\mathrm{Cap}_{\mathcal B}(t_2,d_r)\le \mathrm{Cap}_{\mathcal B}(t_1,d_r)\).
+\end{enumerate}
+Then
+\begin{align}
+Q_{r,\mathcal B}^{rec}(t_2)&\le Q_{r,\mathcal B}^{rec}(t_1),
+\label{eq:erosion_q}\\
+U_{r,\mathcal B}(t_2)&\ge U_{r,\mathcal B}(t_1).
+\label{eq:erosion_u}
+\end{align}
+\end{theorem}
+
+\begin{pf}
+Let \(x^*\) be an optimal solution of the maximum recoverable quantity problem at \(t_2\), so that
+\[
+Q_{r,\mathcal B}^{rec}(t_2)
+=
+\sum_{j\in\mathcal E_r(t_2)}q_jx_j^*.
+\]
+By (C2), every job selected by \(x^*\) belongs to \(\mathcal E_r(t_1)\). Construct a candidate solution \(\hat x\) for time \(t_1\) by setting \(\hat x_j=x_j^*\) for \(j\in\mathcal E_r(t_2)\) and \(\hat x_j=0\) for \(j\in\mathcal E_r(t_1)\setminus\mathcal E_r(t_2)\). Its bottleneck workload at \(t_1\) satisfies
+\begin{align}
+\sum_{j\in\mathcal E_r(t_1)}
+\underline w_{j,\mathcal B}(t_1)\hat x_j
+&=
+\sum_{j\in\mathcal E_r(t_2)}
+\underline w_{j,\mathcal B}(t_1)x_j^*
+\nonumber\\
+&\le
+\sum_{j\in\mathcal E_r(t_2)}
+\underline w_{j,\mathcal B}(t_2)x_j^*
+\qquad \text{by (C3)}
+\nonumber\\
+&\le
+\mathrm{Cap}_{\mathcal B}(t_2,d_r)
+\qquad \text{by feasibility at \(t_2\)}
+\nonumber\\
+&\le
+\mathrm{Cap}_{\mathcal B}(t_1,d_r)
+\qquad \text{by (C4)}.
+\nonumber
+\end{align}
+Thus \(\hat x\) is feasible at \(t_1\), and
+\[
+Q_{r,\mathcal B}^{rec}(t_1)
+\ge
+\sum_{j\in\mathcal E_r(t_1)}q_j\hat x_j
+=
+\sum_{j\in\mathcal E_r(t_2)}q_jx_j^*
+=
+Q_{r,\mathcal B}^{rec}(t_2),
+\]
+which proves \eqref{eq:erosion_q}. Using (C1) and \eqref{eq:erosion_q},
+\begin{align}
+U_{r,\mathcal B}(t_2)
+&=
+[Q_r^{rem}(t_2)-Q_{r,\mathcal B}^{rec}(t_2)]_+
+\nonumber\\
+&\ge
+[Q_r^{rem}(t_1)-Q_{r,\mathcal B}^{rec}(t_1)]_+
+=
+U_{r,\mathcal B}(t_1),
+\nonumber
+\end{align}
+which proves \eqref{eq:erosion_u}.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: erosion identifies fragile entities whose recoverability margin is being consumed, motivating guarded RG intensification before service recovery becomes structurally impossible. The result does not claim that recoverability always decreases; new arrivals or capacity releases may violate the stated conditions.
+
+\subsection{Mandatory rescue jobs}
+\label{sec:mandatory_rescue}
+
+When optimistic zero-shortfall recovery remains attainable, some jobs may be indispensable. For \(j\in\mathcal E_r(t)\), define the exclusion-based maximum recoverable quantity as
+\begin{equation}
+Q_{r,\mathcal B}^{rec,-j}(t)
+=
+\max
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i x_i
+\label{eq:exclusion_recoverable}
+\end{equation}
+subject to
+\begin{equation}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}
+\underline w_{i,\mathcal B}(t)x_i
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r),
+\qquad
+x_i\in\{0,1\}.
+\label{eq:exclusion_capacity}
+\end{equation}
+
+\begin{definition}[Mandatory rescue job]
+\label{def:mandatory_rescue}
+A job \(j\in\mathcal E_r(t)\) is a mandatory rescue job for entity \(r\) at time \(t\) if
+\begin{equation}
+Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)
+\quad\text{and}\quad
+Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t).
+\label{eq:mandatory_definition}
+\end{equation}
+\end{definition}
+
+\begin{theorem}[Mandatory on-time delivery]
+\label{thm:mandatory_delivery}
+If \(j\) is a mandatory rescue job for entity \(r\) at time \(t\), then every feasible continuation schedule \(\pi\) with \(U_r^\pi=0\) must deliver \(j\) no later than \(d_r\).
+\end{theorem}
+
+\begin{pf}
+Suppose, for contradiction, that a feasible continuation \(\pi\) achieves \(U_r^\pi=0\) while delivering \(j\) after the cutoff, i.e., \(D_j^\pi>d_r\). Let \(\mathcal J_r^{on}(\pi)\subseteq\mathcal E_r(t)\) be the entity-\(r\) jobs delivered on time under \(\pi\). Since \(j\) is late, \(\mathcal J_r^{on}(\pi)\subseteq\mathcal E_r(t)\setminus\{j\}\). Because \(U_r^\pi=0\), the selected on-time jobs must satisfy
+\[
+\sum_{i\in\mathcal J_r^{on}(\pi)}q_i
+\ge
+Q_r^{rem}(t).
+\]
+As in the proof of Theorem~\ref{thm:unavoidable_shortfall}, feasibility of \(\pi\) implies
+\[
+\sum_{i\in\mathcal J_r^{on}(\pi)}
+\underline w_{i,\mathcal B}(t)
+\le
+\mathrm{Cap}_{\mathcal B}(t,d_r).
+\]
+Thus the indicator vector of \(\mathcal J_r^{on}(\pi)\) is feasible for the exclusion problem \eqref{eq:exclusion_recoverable}--\eqref{eq:exclusion_capacity}, giving
+\[
+Q_{r,\mathcal B}^{rec,-j}(t)
+\ge
+\sum_{i\in\mathcal J_r^{on}(\pi)}q_i
+\ge
+Q_r^{rem}(t),
+\]
+which contradicts Definition~\ref{def:mandatory_rescue}. Therefore any zero-shortfall continuation must deliver \(j\) on time.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: mandatory rescue jobs are direct candidates for RG repair, priority construction, and no-regret candidate filtering.
+
+\begin{proposition}[Quantity-mandatory jobs]
+\label{prop:quantity_mandatory}
+Assume \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\). If
+\begin{equation}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i
+<
+Q_r^{rem}(t),
+\label{eq:quantity_mandatory_cond}
+\end{equation}
+then \(j\) is a mandatory rescue job.
+\end{proposition}
+
+\begin{pf}
+Any feasible solution of the exclusion problem \eqref{eq:exclusion_recoverable}--\eqref{eq:exclusion_capacity} selects only jobs from \(\mathcal E_r(t)\setminus\{j\}\). Hence its value cannot exceed the total available quantity in that set:
+\[
+Q_{r,\mathcal B}^{rec,-j}(t)
+\le
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i
+<
+Q_r^{rem}(t).
+\]
+Together with \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\), Definition~\ref{def:mandatory_rescue} is satisfied.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: quantity-mandatory jobs can be detected without solving exclusion knapsack problems, making them inexpensive rescue candidates.
+
+\begin{proposition}[Capacity-mandatory jobs]
+\label{prop:capacity_mandatory}
+Assume \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\). If
+\begin{equation}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i
+\ge
+Q_r^{rem}(t)
+\quad\text{but}\quad
+Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t),
+\label{eq:capacity_mandatory_cond}
+\end{equation}
+then \(j\) is a mandatory rescue job.
+\end{proposition}
+
+\begin{pf}
+The first inequality rules out pure quantity insufficiency after excluding \(j\), while the second states that no capacity-feasible alternative subset can meet the remaining requirement. With \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\), these conditions are exactly Definition~\ref{def:mandatory_rescue}.
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: capacity-mandatory jobs expose service risk caused by bottleneck contention rather than aggregate quantity shortage.
+
+\begin{proposition}[Marginal recoverability characterization]
+\label{prop:marginal_recoverability}
+Let
+\begin{align}
+S_{r,\mathcal B}^{rec}(t)
+&=
+Q_{r,\mathcal B}^{rec}(t)-Q_r^{rem}(t),
+\label{eq:surplus}\\
+\Delta_{j,r,\mathcal B}^{rec}(t)
+&=
+Q_{r,\mathcal B}^{rec}(t)-Q_{r,\mathcal B}^{rec,-j}(t).
+\label{eq:marginal}
+\end{align}
+If \(Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)\), then \(j\) is a mandatory rescue job if and only if
+\begin{equation}
+\Delta_{j,r,\mathcal B}^{rec}(t)>S_{r,\mathcal B}^{rec}(t).
+\label{eq:marginal_condition}
+\end{equation}
+\end{proposition}
+
+\begin{pf}
+By Definition~\ref{def:mandatory_rescue}, \(j\) is mandatory if and only if
+\[
+Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t).
+\]
+Substituting
+\[
+Q_{r,\mathcal B}^{rec,-j}(t)
+=
+Q_{r,\mathcal B}^{rec}(t)
+-
+\Delta_{j,r,\mathcal B}^{rec}(t)
+\]
+gives
+\[
+Q_{r,\mathcal B}^{rec}(t)
+-
+\Delta_{j,r,\mathcal B}^{rec}(t)
+<
+Q_r^{rem}(t),
+\]
+which is equivalent to
+\[
+\Delta_{j,r,\mathcal B}^{rec}(t)
+>
+Q_{r,\mathcal B}^{rec}(t)-Q_r^{rem}(t)
+=
+S_{r,\mathcal B}^{rec}(t).
+\]
+\end{pf}
+
+Implication for NR-RG-RHO-LNS: when \(S_{r,\mathcal B}^{rec}(t)\) is thin, even jobs with moderate marginal contributions become rescue-critical, providing a direct signal for fragile entity identification and service-risk-aware diversity.
+
+\subsection{Implications for algorithm design}
+\label{sec:recoverability_implications}
+
+The structural results do not imply that every RG move improves the final schedule. Instead, they provide service-risk-aware information that can be used to diversify candidates and neighborhoods. NR-RG-RHO-LNS uses these indicators in five ways:
+\begin{enumerate}
+    \item Recoverability diagnosis: \(Q_{r,\mathcal B}^{rec}(t)\), \(W_{r,\mathcal B}^{\min}(t)\), and \(U_{r,\mathcal B}(t)\) quantify residual service risk at each event.
+    \item Fragile entity identification: \(S_{r,\mathcal B}^{rec}(t)\) separates entities with a recovery margin from those close to losing recoverability.
+    \item Mandatory rescue candidate generation: Definition~\ref{def:mandatory_rescue} and Propositions~\ref{prop:quantity_mandatory}--\ref{prop:marginal_recoverability} identify jobs that should appear in RG-oriented construction and repair candidates.
+    \item No-regret filtering: all RG candidates are evaluated by \(Z\); inferior candidates are not forced into the incumbent.
+    \item Service-risk-aware diversity: RG-SPT and RG-ATC hybrid candidates complement generic earliest-deadline and processing-time candidates.
+\end{enumerate}
+
+\section{Proposed algorithm: NR-RG-RHO-LNS}
+\label{sec:algorithm}
+
+\subsection{Overall framework}
+\label{sec:algorithm_overall}
+
+NR-RG-RHO-LNS is a solver-free algorithm for event-driven SL-ISP. It combines a rolling-horizon optimization backbone with large neighborhood search, but does not solve MILP or CP subproblems during the main search. At each event epoch, the algorithm updates the available operations, maintains a pool of incumbent schedules, diagnoses recoverability, generates generic and RG candidates, evaluates all candidates by \(Z\), and preserves the best incumbent found so far.
+
+\begin{algorithm}[!t]
+\caption{Overall NR-RG-RHO-LNS framework}
+\label{alg:overall}
+\begin{algorithmic}[1]
+\Require SL-ISP instance, event stream, schedule-evaluation budget
+\Ensure Best complete schedule evaluated by \(Z\)
+\State Generate initial incumbents by Algorithm~\ref{alg:multistart}
+\State Set the best incumbent to the schedule with the smallest \(Z\)
+\For{each event-driven decision epoch}
+    \State Update job releases, completed operations, idle machines, and ready operations
+    \State Diagnose recoverability using \(Q_{r,\mathcal B}^{rec}(t)\), \(U_{r,\mathcal B}(t)\), and mandatory rescue jobs
+    \State Build a rolling-horizon candidate set from ready jobs, deadline-risk jobs, and service-risk jobs
+    \For{each retained incumbent}
+        \State Generate generic LNS candidates using unbiased destroy and repair moves
+        \State Generate RG candidates using fragile entities and mandatory rescue jobs
+        \State Evaluate every candidate schedule by the original objective \(Z\)
+        \State Accept an improving candidate; otherwise preserve the incumbent
+        \State Update the best incumbent if a smaller \(Z\) is found
+    \EndFor
+\EndFor
+\State \Return the best incumbent according to \(Z\)
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{No-regret multi-start initialization}
+\label{sec:no_regret_initialization}
+
+The initialization stage constructs a diverse candidate pool. Candidate schedules are generated from earliest deadline first (EDF), earliest due date (EDD)-oriented priority, SPT, WSPT, ATC, regret-\(k\) insertion, RG-SPT hybrids, and RG-ATC hybrids. Each candidate is evaluated by \(Z\), lightly polished by local improving moves, and re-evaluated. The top-ranked schedules are retained as initial incumbents. The no-regret rule means that recoverability-guided candidates are allowed to enter the pool, but the final initial incumbent is selected only by \(Z\).
+
+\begin{algorithm}[!t]
+\caption{No-regret multi-start initialization}
+\label{alg:multistart}
+\begin{algorithmic}[1]
+\Require Initial schedule state and construction budget
+\Ensure Retained incumbent pool
+\State Initialize an empty candidate pool
+\State Add EDF and EDD-oriented construction candidates
+\State Add SPT, WSPT, ATC, and regret-\(k\) construction candidates
+\State Diagnose initial recoverability and compute service-risk priorities
+\State Add RG-SPT and RG-ATC hybrid candidates
+\For{each candidate schedule}
+    \State Evaluate the candidate by \(Z\)
+    \State Apply lightweight polishing under the same feasibility rules
+    \State Re-evaluate the polished candidate by \(Z\)
+\EndFor
+\State Sort all candidates by \(Z\)
+\State Retain the top-ranked schedules as the initial incumbent pool
+\State \Return retained incumbents
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Recoverability-guided candidate generation}
+\label{sec:rg_candidate_generation}
+
+RG candidate generation uses the structural quantities in Section~\ref{sec:recoverability}. Entities with positive \(U_{r,\mathcal B}(t)\) are recognized as partially unrecoverable under the optimistic relaxation; entities with small \(S_{r,\mathcal B}^{rec}(t)\) are treated as fragile. Mandatory rescue jobs are inserted into candidate priority lists, and jobs with high marginal contribution \(\Delta_{j,r,\mathcal B}^{rec}(t)\) are used to diversify RG-oriented schedules.
+
+The RG component is guarded. It can propose construction and repair candidates, but it does not override the objective. A candidate that improves a recoverability indicator but worsens \(Z\) is retained only if it survives the same acceptance rule applied to all candidates. This design prevents recoverability guidance from becoming a hard constraint that could degrade the incumbent.
+
+\subsection{Rolling-horizon LNS search}
+\label{sec:rho_lns_search}
+
+The RHO-LNS stage operates on a restricted set of jobs around the current event epoch. Completed operations and ongoing non-preemptive operations are fixed. The search destroys a subset of scheduled decisions in the rolling horizon and repairs them using feasible dispatching and insertion rules. Generic neighborhoods target deadline-risk jobs, congested machine intervals, and high-tardiness jobs. RG neighborhoods target fragile entities, mandatory rescue jobs, and operations competing for the bottleneck pool \(\mathcal B\).
+
+All repaired schedules are evaluated by \(Z\). The search budget is counted by schedule evaluations so that iterative methods can be compared under an equal computational budget in Section~\ref{sec:experiments}.
+
+\subsection{Incumbent preservation and acceptance rule}
+\label{sec:acceptance_rule}
+
+The incumbent preservation rule is simple: the best schedule found so far is never replaced by a schedule with worse \(Z\). During local search, a candidate is accepted if it strictly improves \(Z\). A guarded acceptance option may allow a candidate with the same \(Z\) to be kept when it improves WSF or increases service-risk diversity, but final selection is always based on the original objective \(Z\). This rule is the ``no-regret'' part of NR-RG-RHO-LNS.
+
+\subsection{Computational complexity and implementation notes}
+\label{sec:algorithm_complexity}
+
+The computational effort of NR-RG-RHO-LNS is controlled by the number of retained incumbents, the rolling-horizon candidate size, the number of LNS iterations, and the cost of recoverability diagnosis. The recoverability relaxation decomposes by service entity and can be solved by dynamic programming for the 0-1 knapsack form in \eqref{eq:recoverable_quantity}--\eqref{eq:recoverable_capacity}. The main search remains solver-free: it uses constructive scheduling, destroy-repair moves, local polishing, and objective evaluation rather than repeatedly invoking the MILP.
+
+\section{Computational experiments}
+\label{sec:experiments}
+
+\subsection{Experimental design}
+\label{sec:experimental_design}
+
+The experiments are designed to evaluate algorithmic behavior under controlled service pressure, machine capacity, and job-size settings. The planned benchmark uses three pressure levels, four job-size levels, three machine-size levels, and matched random seeds. The current experimental configuration is summarized in Table~\ref{tab:experimental_settings}. These values describe the planned design and do not constitute performance results.
+
+\begin{table}[!t]
+\centering
+\caption{Experimental settings. Planned instance factors and run structure.}
+\label{tab:experimental_settings}
+\small
+\begin{tabularx}{\textwidth}{lY}
+\toprule
+\textbf{Item} & \textbf{Planned setting} \\
+\midrule
+Instance factors & 3 pressure levels \(\times\) 3 machine levels \(\times\) 4 job-size levels \\
+Jobs & 40, 80, 120, 160 \\
+Machines & 5, 10, 15 \\
+Service entities & Scaled with job count; planned levels include 3, 5, 8, and 10 \\
+Operations per job & Uniformly generated in the range 2--4 \\
+Processing times & Generated from the configured interval [10, 50] \\
+Transportation delays & Generated from the configured interval [10, 40] \\
+Pressure levels & Medium, high, and very high fulfillment-ratio settings \\
+Dynamic arrivals & Medium-intensity dynamic arrivals with matched seeds \\
+Objective weights & \(\alpha=1.0\), \(\beta=1.0\) in the main design \\
+Compared algorithms & 13 algorithms listed in Table~\ref{tab:algorithm_classification} \\
+Run count & Planned total: 1404 runs under the current configuration \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Matched seeds are used so that paired comparisons are made on the same instance and stochastic stream. Iterative methods are allocated an equal schedule-evaluation budget. If objective-weight or entity-weight sensitivity files are generated, they will be reported as supplementary analyses rather than used to replace the main comparison.
+
+\subsection{Compared algorithms}
+\label{sec:compared_algorithms}
+
+Table~\ref{tab:algorithm_classification} lists the 13 algorithms planned for the main comparison. The table describes mechanisms and solver use; it does not report performance.
+
+\begin{table}[!t]
+\centering
+\caption{Algorithm classification.}
+\label{tab:algorithm_classification}
+\small
+\begin{tabularx}{\textwidth}{lYYc}
+\toprule
+\textbf{Algorithm} & \textbf{Category} & \textbf{Main mechanism} & \textbf{Solver-free} \\
+\midrule
+EDD & Dispatching rule & Earliest due date priority based on entity cutoff. & Yes \\
+SPT & Dispatching rule & Shortest processing time priority. & Yes \\
+WSPT & Dispatching rule & Processing-time priority weighted by service importance. & Yes \\
+ATC & Dispatching rule & Apparent tardiness cost priority with deadline slack. & Yes \\
+Service-weighted & Service rule & Priority biased toward high-weight entities. & Yes \\
+Shortfall-greedy & Service rule & Greedy priority based on immediate shortfall reduction. & Yes \\
+Plain RHO & Rolling horizon & EDF-style construction in a rolling horizon without LNS. & Yes \\
+RHO-LNS & LNS baseline & Rolling-horizon LNS without recoverability guidance. & Yes \\
+Adaptive RG & RG baseline & Recoverability-guided LNS without the final no-regret multi-start design. & Yes \\
+ILS & Metaheuristic & Iterated local search adapted to the event-driven setting. & Yes \\
+VNS & Metaheuristic & Variable neighborhood search with rolling-horizon evaluation. & Yes \\
+TS & Metaheuristic & Tabu search with local swap or relocation neighborhoods. & Yes \\
+NR-RG-RHO-LNS & Proposed method & No-regret multi-start, RG candidate diversity, RHO-LNS, and incumbent preservation. & Yes \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Evaluation metrics}
+\label{sec:evaluation_metrics}
+
+Each run will report the final objective \(Z\), total tardiness \(TT=\sum_{j\in\mathcal J}T_j\), weighted service shortfall \(WSF=\sum_{r\in\mathcal R}w_rU_r\), zero-shortfall entity rate \(ZSR=|\{r:U_r=0\}|/|\mathcal R|\), runtime, and schedule-evaluation counts where available. The same objective weights used in scheduling are used for final evaluation.
+
+\subsection{Overall performance comparison}
+\label{sec:overall_comparison}
+
+Table~\ref{tab:overall_comparison} reports the overall performance of all compared methods. The final interpretation will be completed after the experimental results are generated.
+
+\begin{table}[!t]
+\centering
+\caption{Overall comparison. Cells will be populated from the final run-level CSV.}
+\label{tab:overall_comparison}
+\small
+\begin{tabularx}{\textwidth}{lccccc}
+\toprule
+\textbf{Algorithm} & \textbf{\(Z\)} & \textbf{TT} & \textbf{WSF} & \textbf{ZSR} & \textbf{Runtime} \\
+\midrule
+\IfFileExists{generated_tables/table3_overall_comparison_rows.tex}{%
+\input{generated_tables/table3_overall_comparison_rows.tex}%
+}{%
+EDD & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+SPT & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+WSPT & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+ATC & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Service-weighted & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Shortfall-greedy & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Plain RHO & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+RHO-LNS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Adaptive RG & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+ILS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+VNS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+TS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+NR-RG-RHO-LNS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig1_overall_Z.pdf}{Overall \(Z\) comparison across the 13 algorithms. Error bars or distribution summaries will be inserted after aggregation.}{fig:overall_z}
+\placeholderfigure{figures/fig2_tt_wsf_decomposition.pdf}{Decomposition of the objective into TT and WSF components.}{fig:tt_wsf_decomposition}
+
+\subsection{Pressure-level analysis}
+\label{sec:pressure_analysis}
+
+Table~\ref{tab:pressure_comparison} will compare all algorithms under the three pressure levels. Figures~\ref{fig:pressure_z} and \ref{fig:pressure_wsf} will visualize the corresponding \(Z\) and WSF patterns. The analysis will be written only after the pressure-level aggregates are available.
+
+\begin{table}[!t]
+\centering
+\caption{Pressure-level comparison. The final table contains 3 pressure levels \(\times\) 13 algorithms.}
+\label{tab:pressure_comparison}
+\small
+\begin{tabularx}{\textwidth}{l l c c c c}
+\toprule
+\textbf{Pressure} & \textbf{Algorithm} & \textbf{\(Z\)} & \textbf{TT} & \textbf{WSF} & \textbf{ZSR} \\
+\midrule
+\IfFileExists{generated_tables/table4_pressure_comparison_rows.tex}{%
+\input{generated_tables/table4_pressure_comparison_rows.tex}%
+}{%
+Medium / High / Very high & 13 algorithms & \multicolumn{4}{c}{\todoresult{pending aggregation from run-level CSV}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig3_pressure_Z.pdf}{Pressure-level \(Z\) comparison for representative and full algorithm groups.}{fig:pressure_z}
+\placeholderfigure{figures/fig4_pressure_WSF.pdf}{Pressure-level WSF comparison, highlighting service-shortfall behavior under increasing fulfillment requirements.}{fig:pressure_wsf}
+
+\subsection{Statistical tests}
+\label{sec:statistical_tests}
+
+Paired tests will compare NR-RG-RHO-LNS with each baseline using matched instance-seed pairs. The primary test is a paired nonparametric test on \(Z\), with win rate and effect size reported together. Run-level and instance-level summaries will both be retained to avoid over-interpreting repeated seeds as independent instances.
+
+\begin{table}[!t]
+\centering
+\caption{Paired statistical tests. NR-RG-RHO-LNS will be compared with the 12 baselines.}
+\label{tab:paired_tests}
+\small
+\begin{tabularx}{\textwidth}{lcccc}
+\toprule
+\textbf{Baseline} & \textbf{\(\Delta Z\)} & \textbf{Win rate} & \textbf{\(p\)-value} & \textbf{Effect size} \\
+\midrule
+\IfFileExists{generated_tables/table5_paired_tests_rows.tex}{%
+\input{generated_tables/table5_paired_tests_rows.tex}%
+}{%
+12 baselines & \multicolumn{4}{c}{\todoresult{pending paired tests from matched run-level results}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[!t]
+\centering
+\caption{Pressure-specific paired tests. This table is reserved for appendix or supplementary reporting.}
+\label{tab:pressure_specific_tests}
+\small
+\begin{tabularx}{\textwidth}{l l c c c}
+\toprule
+\textbf{Pressure} & \textbf{Baseline} & \textbf{\(\Delta Z\)} & \textbf{Win rate} & \textbf{\(p\)-value} \\
+\midrule
+\IfFileExists{generated_tables/table5b_pressure_specific_tests_rows.tex}{%
+\input{generated_tables/table5b_pressure_specific_tests_rows.tex}%
+}{%
+Medium / High / Very high & 12 baselines & \multicolumn{3}{c}{\todoresult{pending pressure-specific paired tests}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Ablation study}
+\label{sec:ablation}
+
+The ablation study will isolate the contribution of construction diversity, no-regret selection, lightweight polishing, top-ranked incumbent selection, and RG-LNS search. The planned variants are listed in Table~\ref{tab:ablation}.
+
+\begin{table}[!t]
+\centering
+\caption{Ablation study. Values will be computed from ablation or tagged run-level outputs.}
+\label{tab:ablation}
+\small
+\begin{tabularx}{\textwidth}{lcccc}
+\toprule
+\textbf{Variant} & \textbf{\(Z\)} & \textbf{TT} & \textbf{WSF} & \textbf{ZSR} \\
+\midrule
+\IfFileExists{generated_tables/table6_ablation_rows.tex}{%
+\input{generated_tables/table6_ablation_rows.tex}%
+}{%
+EDF-only & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Best-of-5 & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Multi-start & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+\(+\)polishing & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+\(+\)top-\(k\) LNS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+Full NR-RG-RHO-LNS & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} & \todoresult{pending} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig5_ablation.pdf}{Ablation study comparing incremental components of NR-RG-RHO-LNS.}{fig:ablation}
+\placeholderfigure{figures/fig6_candidate_selection_frequency.pdf}{Candidate selection frequency during no-regret multi-start initialization.}{fig:candidate_selection}
+
+\subsection{Scalability analysis}
+\label{sec:scalability}
+
+Scalability will be evaluated by job size and machine size. Table~\ref{tab:scalability} reserves columns for relative gap to the best observed method and improvement over RHO-LNS, rather than reporting raw \(Z\) alone.
+
+\begin{table}[!t]
+\centering
+\caption{Scalability analysis. Relative gap and improvement columns prevent the analysis from relying only on raw \(Z\).}
+\label{tab:scalability}
+\small
+\begin{tabularx}{\textwidth}{l l c c c}
+\toprule
+\textbf{Jobs} & \textbf{Machines} & \textbf{Algorithm} & \textbf{Gap to best} & \textbf{Improvement over RHO-LNS} \\
+\midrule
+\IfFileExists{generated_tables/table7_scalability_rows.tex}{%
+\input{generated_tables/table7_scalability_rows.tex}%
+}{%
+40 / 80 / 120 / 160 & 5 / 10 / 15 & 13 algorithms & \multicolumn{2}{c}{\todoresult{pending scalability aggregation}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig9_scalability_heatmap.pdf}{Scalability heatmap based on relative gap or improvement over RHO-LNS.}{fig:scalability_heatmap}
+
+\subsection{Convergence and runtime analysis}
+\label{sec:convergence_runtime}
+
+Convergence curves are required for the iterative methods. The convergence figure will report best-so-far \(Z\) versus iteration under the matched evaluation budget. Runtime will be shown on a log scale where appropriate. Table~\ref{tab:runtime_budget} reserves budget-related fields, including schedule evaluations, construction time, and search time.
+
+\begin{table}[!t]
+\centering
+\caption{Runtime and budget.}
+\label{tab:runtime_budget}
+\small
+\begin{tabularx}{\textwidth}{lccccc}
+\toprule
+\textbf{Algorithm} & \textbf{Avg. runtime} & \textbf{Max. runtime} & \textbf{Evaluations} & \textbf{Construction time} & \textbf{Search time} \\
+\midrule
+\IfFileExists{generated_tables/table9_runtime_budget_rows.tex}{%
+\input{generated_tables/table9_runtime_budget_rows.tex}%
+}{%
+13 algorithms & \multicolumn{5}{c}{\todoresult{pending runtime and budget logs}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig7_convergence_best_so_far_Z.pdf}{Convergence curve showing best-so-far \(Z\) versus iteration for iterative methods.}{fig:convergence}
+\placeholderfigure{figures/fig8_runtime_log_scale.pdf}{Runtime comparison across algorithms on a log scale.}{fig:runtime}
+
+\subsection{Operator contribution}
+\label{sec:operator_contribution}
+
+Operator diagnostics will be reported only when operator-level logs are available. Table~\ref{tab:operator_contribution} and Figure~\ref{fig:operator_contribution} reserve space for usage ratio, success rate, and mean improvement magnitude.
+
+\begin{table}[!t]
+\centering
+\caption{Operator contribution.}
+\label{tab:operator_contribution}
+\small
+\begin{tabularx}{\textwidth}{lccc}
+\toprule
+\textbf{Operator group} & \textbf{Usage ratio} & \textbf{Success rate} & \textbf{Mean \(\Delta Z\) improvement} \\
+\midrule
+\IfFileExists{generated_tables/table8_operator_contribution_rows.tex}{%
+\input{generated_tables/table8_operator_contribution_rows.tex}%
+}{%
+Destroy / repair / RG-hybrid operators & \multicolumn{3}{c}{\todoresult{pending operator diagnostics}} \\
+}%
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\placeholderfigure{figures/fig10_operator_contribution.pdf}{Operator contribution measured by success rate and improvement magnitude.}{fig:operator_contribution}
+
+\subsection{Gantt-chart illustration}
+\label{sec:gantt}
+
+A representative Gantt chart is required to illustrate the interaction between machine schedules and service-entity fulfillment. The final example will be selected after the runs are complete and will be described without overstating generality.
+
+\placeholderfigure{figures/fig11_representative_gantt.pdf}{Representative Gantt chart showing machine assignments and service-entity fulfillment timing.}{fig:gantt}
+
+\section{Conclusions}
+\label{sec:conclusions}
+
+This manuscript framework defines SL-ISP, presents a compact offline MILP reference model, develops structural recoverability indicators, and specifies the solver-free NR-RG-RHO-LNS algorithm. The recoverability analysis provides diagnostic quantities for fragile entities, unavoidable shortfall, and mandatory rescue jobs, while the algorithm uses these quantities for candidate diversity under no-regret incumbent preservation.
+
+The empirical conclusions are not written in this version because the final experimental results are not yet available. After the result CSV files and figures are generated, this section should be updated with verified findings on overall performance, pressure sensitivity, statistical significance, ablation effects, scalability, convergence, runtime, and the representative Gantt-chart case.
+
+\bibliographystyle{cas-model2-names}
+\bibliography{0224}
+
+\end{document}

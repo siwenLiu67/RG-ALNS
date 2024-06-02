@@ -1,0 +1,669 @@
+%% 
+%% Copyright 2019-2024 Elsevier Ltd
+%% 
+%% This file is part of the 'CAS Bundle'.
+%% --------------------------------------
+%% 
+%% It may be distributed under the conditions of the LaTeX Project Public
+%% License, either version 1.3c of this license or (at your option) any
+%% later version.  The latest version of this license is in
+%%    http://www.latex-project.org/lppl.txt
+%% and version 1.3c or later is part of all distributions of LaTeX
+%% version 1999/12/01 or later.
+%% 
+%% The list of all files belonging to the 'CAS Bundle' is
+%% given in the file `manifest.txt'.
+%% 
+%% Template article for cas-sc documentclass for 
+%% double column output.
+
+\documentclass[a4paper,fleqn]{cas-sc}
+\usepackage[numbers]{natbib}
+
+%\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{float}
+
+% optional natbib options (do NOT re-load natbib)
+% \biboptions{longnamesfirst}
+
+%%%Author macros
+\def\tsc#1{\csdef{#1}{\textsc{\lowercase{#1}}\xspace}}
+\tsc{WGM}
+\tsc{QE}
+%%%
+
+% Uncomment and use as if needed
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newdefinition{rmk}{Remark}
+\newproof{pf}{Proof}
+\newproof{pot}{Proof of Theorem \ref{thm}}
+\newdefinition{definition}{Definition}
+\newdefinition{example}{Example}     % 对应你的数值反例
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{observation}{Observation}
+\newtheorem{remark}{Remark}
+\begin{document}
+\let\WriteBookmarks\relax
+\def\floatpagepagefraction{1}
+\def\textpagefraction{.001}
+
+% Short title
+\shorttitle{}    
+
+% Short author
+\shortauthors{Siwen Liu et~al.}  
+
+% Main title of the paper
+\title [mode = title]{Structure-guided service-pressure allocation with option composition for service-level-aware integrated production scheduling in instant retail}
+
+% First author
+%
+% Options: Use if required
+% eg: \author[1,3]{Author Name}[type=editor,
+%       style=chinese,
+%       auid=000,
+%       bioid=1,
+%       prefix=Sir,
+%       orcid=0000-0000-0000-0000,
+%       facebook=<facebook id>,
+%       twitter=<twitter id>,
+%       linkedin=<linkedin id>,
+%       gplus=<gplus id>]
+
+\author[1]{Siwen Liu}%[<options>]
+
+% Corresponding author indication
+\cormark[1]
+
+% Footnote of the first author
+% \fnmark[1]
+
+% Email id of the first author
+\ead{siwenliu@sandau.edu.cn}
+
+% Credit authorship
+% eg: \credit{Conceptualization of this study, Methodology, Software}
+\credit{Conceptualization of this study, Methodology, Software, Writing - Original draft preparation}
+
+% Address/affiliation
+\affiliation[1]{organization={School of Information Science and Technology, Sandau University},
+            city={Shanghai},
+%          citysep={}, % Uncomment if no comma needed between city and postcode
+            postcode={201209}, 
+            country={PR China}}
+
+
+% Here goes the abstract
+\begin{abstract}
+Integrated production and distribution scheduling (IPDS) in zone-based instant retail systems poses a fundamental challenge
+\end{abstract}
+% Use if graphical abstract is present
+%\begin{graphicalabstract}
+%\includegraphics{}
+%\end{graphicalabstract}
+
+% Research highlights
+% \begin{highlights}
+% \end{highlights}
+
+
+% Keywords
+% Each keyword is seperated by \sep
+\begin{keywords}
+Integrated production and distribution scheduling 
+\end{keywords}
+
+\maketitle
+\section{Introduction}
+
+\section{Problem Formulation}
+\label{sec:problem_formulation}
+
+This section formally defines the Service-Level-Aware Integrated Scheduling Problem (SL-ISP), which arises in zone-based instant retail fulfillment. The problem coordinates flexible job-shop production with zone-level delivery commitments so as to balance job-level efficiency and aggregate service-level attainment.
+
+\subsection{Problem description}
+The SL-ISP considers a finite service window containing a set of jobs $\mathcal{J} = \{J_1, J_2, \dots, J_n\}$ to be processed on $m$ flexible machines $\mathcal{M} = \{M_1, M_2, \dots, M_m\}$. All jobs belonging to the current service window are known at the beginning of the horizon, but they become available to the shop floor dynamically according to their release times. Each job $J_i$ is associated with a specific service entity (zone) $R_r$ from a set $\mathcal{R} = \{R_1, R_2, \dots, R_{|\mathcal{R}|}\}$, and the mapping $g(i)=r$ indicates that job $J_i$ belongs to entity $R_r$. Each job consists of $n_i$ operations $\{O_{i,1}, O_{i,2}, \dots, O_{i,n_i}\}$, where each operation $O_{i,j}$ must be assigned to one compatible machine from the set $\mathcal{M}_{i,j} \subseteq \mathcal{M}$.
+
+The processing time of $O_{i,j}$ on machine $M_h$ is denoted as $t_{i,j,h}$. Let $C_{i,j}$ be the completion time of operation $O_{i,j}$, and $C_i$ the completion time of the final operation of job $J_i$. Upon production completion, the job incurs a deterministic transportation delay $\tau_{g(i)}$ associated with its service entity, resulting in a final delivery time $D_i = C_i + \tau_{g(i)}$. In the current study, the distribution layer is represented through zone-specific delivery commitments rather than vehicle-routing decisions. Specifically, each entity $R_r$ has an aggregate committed demand quantity $Q_r = \sum_{i:g(i)=r} q_i$, a common service cutoff time $d_r$, a minimum fulfillment ratio $\rho_r \in (0,1]$, and an importance weight $w_r$.
+
+This formulation explicitly couples machine-level operation sequencing with entity-level service fulfillment. For each entity $R_r$, the system must satisfy a minimum fulfillment requirement $Q_r^{\min} = \rho_r Q_r$. A job $J_i$ is considered on-time if $D_i \le d_{g(i)}$; otherwise, it incurs an individual tardiness $T_i = \max(0, D_i - d_{g(i)})$. Let $Q_r^{\text{on-time}} = \sum_{i:g(i)=r} q_i \cdot \mathbb{I}(D_i \le d_r)$ be the total quantity delivered on time for entity $R_r$, where $\mathbb{I}(\cdot)$ is the indicator function. A service shortfall $U_r = \max(0, \rho_r Q_r - Q_r^{\text{on-time}})$ occurs if the on-time delivery falls below the threshold. The resulting objective integrates two complementary managerial costs: the tardiness term captures continuous job-level delay, while the shortfall term captures zone-level service commitment violation. The overall objective is to minimize the aggregate weighted cost:
+\begin{equation}
+    \min Z = \alpha \sum_{i \in \mathcal{J}} T_i + \beta \sum_{r \in \mathcal{R}} w_r U_r
+\end{equation}
+
+The following assumptions are maintained throughout this study:
+\begin{enumerate}
+    \item Each machine can process at most one operation at a time.
+    \item Operations within a job must follow a strict linear precedence, while operations from different jobs can be processed concurrently.
+    \item Operations are non-preemptive; once initiated, they must proceed to completion.
+    \item Event-driven rescheduling is triggered at job-release, operation-completion, and machine-idling epochs.
+    \item The job set and zone-level commitment parameters of the current service window are known in advance, but a job can be processed only after its release time $r_j$.
+    \item Internal setup times and inter-operation transit times are negligible or incorporated into processing times.
+    \item The transportation delay $\tau_r$ is deterministic and independent of production sequencing; no vehicle-routing or batching decisions are modeled.
+\end{enumerate}
+
+\subsection{Mathematical Programming Model}
+\label{sec:milp_model}
+\begin{table}[htbp]
+\centering
+\caption{Summary of notations for the SL-ISP model and structural analysis.}
+\label{tab:parameter_summary}
+\small
+\begin{tabular}{ll}
+\toprule
+\textbf{Notation} & \textbf{Definition} \\
+\midrule
+\textit{Indices and Sets} & \\
+$\mathcal{J}, j$ & Set and index of jobs, $\mathcal{J} = \{J_1, \dots, J_n\}$. \\
+$\mathcal{M}, h, m$ & Set and index of flexible machines, $\mathcal{M} = \{M_1, \dots, M_m\}$. \\
+$\mathcal{R}, r$ & Set and index of service entities, $\mathcal{R} = \{R_1, \dots, R_{|\mathcal{R}|}\}$. \\
+$\mathcal{O}_j, o$ & Set and index of operations for job $J_j$. \\
+$\mathcal{M}_{jo}$ & Set of eligible machines for operation $O_{jo}$. \\
+$\mathcal{M}_B$ & Set of designated bottleneck machines. \\
+\midrule
+\textit{Input Parameters} & \\
+$r_j$ & Release time (arrival time) of job $J_j$. \\
+$p_{joh}$ & Processing time of operation $O_{jo}$ on machine $M_h$. \\
+$q_j$ & Quantity contribution of job $J_j$ toward entity demand. \\
+$\tau_r$ & Deterministic transportation delay for service entity $R_r$. \\
+$d_r$ & Common service cutoff time for all jobs in service entity $R_r$. \\
+$Q_r$ & Aggregate committed demand quantity of service entity $R_r$ in the current service window. \\
+$\rho_r$ & Minimum required fulfillment ratio for entity $R_r$ ($\rho_r \in (0, 1]$). \\
+$w_r$ & Importance weight assigned to service entity $R_r$. \\
+$g(j)$ & Mapping function; $g(j)=r$ implies $J_j$ belongs to entity $R_r$. \\
+$\alpha, \beta$ & Weighting factors for tardiness and shortfall in the objective function. \\
+$\mathcal{V}$ & A sufficiently large positive constant (Big-M). \\
+\midrule
+\textit{Decision Variables} & \\
+$S_{jo}$ & Scheduled start time of operation $O_{jo}$. \\
+$C_j$ & Production completion time of the final operation of job $J_j$. \\
+$D_j$ & Final delivery time of job $J_j$, where $D_j = C_j + \tau_{g(j)}$. \\
+$T_j$ & Individual tardiness of job $J_j$, $T_j = \max(0, D_j - d_{g(j)})$. \\
+$U_r$ & Service-level shortfall of entity $R_r$, $U_r = \max(0, \rho_r Q_r - Q_r^{\text{on-time}})$. \\
+$X_{joh}$ & Binary variable: 1 if operation $O_{jo}$ is assigned to machine $M_h$; 0 otherwise. \\
+$Y_{jo,iqh}$ & Binary variable: 1 if $O_{jo}$ precedes $O_{iq}$ on machine $M_h$; 0 otherwise. \\
+$z_j$ & Binary indicator: 1 if job $J_j$ is delivered on-time ($D_j \le d_{g(j)}$); 0 otherwise. \\
+\midrule
+\textit{Structural Analysis Terms} & \\
+$t$ & A specific rescheduling or decision point in time. \\
+$\underline{D}_j(t)$ & Optimistic lower bound of the delivery time for job $J_j$ at time $t$. \\
+$Q_r^{rem}(t)$ & Remaining quantity required to meet the minimum fulfillment of entity $R_r$. \\
+$Q_r^{del}(t)$ & Cumulative on-time quantity of jobs from entity $R_r$ already delivered by time $t$. \\
+$\text{Cap}(m, t, d_r)$ & Aggregate available processing capacity on machine $m$ in window $[t, d_r]$. \\
+$\mathcal{W}_{\min}(r, t)$ & Optimistic workload surrogate required to meet the shortfall of entity $R_r$. \\
+$\Delta T_{total}(j)$ & Aggregate interference cost (local proxy for cascading tardiness). \\
+$\gamma$ & Relative weight ratio, $\gamma = \beta/\alpha$. \\
+$\Gamma_r(t)$ & Urgency-aware goal score for service entity $R_r$ at time $t$. \\
+\bottomrule
+\end{tabular}
+\end{table}
+Table \ref{tab:parameter_summary} summarizes the main notations. For a fully revealed service window, the SL-ISP can be written as the following integrated optimization model. This mixed-integer formulation serves as an offline benchmark for the realized horizon, while the learning-based controller introduced later operates online in an event-driven manner on the same objective.
+\begin{equation}
+\min Z = \alpha \sum_{j \in \mathcal{J}} T_j + \beta \sum_{r \in \mathcal{R}} w_r U_r
+\end{equation}
+
+\noindent \textbf{Subject to:}
+\begin{align}
+& \sum_{h \in \mathcal{M}_{jo}} X_{joh} = 1, && \forall j \in \mathcal{J}, o \in \mathcal{O}_j \label{eq:m1} \\
+& S_{j, 1} \ge r_j, && \forall j \in \mathcal{J} \label{eq:m2} \\
+& S_{j, o+1} \ge S_{jo} + \sum_{h \in \mathcal{M}_{jo}} X_{joh} \cdot p_{joh}, && \forall j \in \mathcal{J}, o < n_j \label{eq:m3} \\
+& S_{jo} + p_{joh} \le S_{iq} + \mathcal{V}(3 - X_{joh} - X_{iqh} - Y_{jo, iqh}), && \forall (j,o) < (i,q), h \in \mathcal{M}_{jo} \cap \mathcal{M}_{iq} \label{eq:m4} \\
+& S_{iq} + p_{iqh} \le S_{jo} + \mathcal{V}(2 - X_{joh} - X_{iqh} + Y_{jo, iqh}), && \forall (j,o) < (i,q), h \in \mathcal{M}_{jo} \cap \mathcal{M}_{iq} \label{eq:m5} \\
+& C_j = S_{j, n_j} + \sum_{h \in \mathcal{M}_{j,n_j}} X_{j,n_j,h} \cdot p_{j,n_j,h}, && \forall j \in \mathcal{J} \label{eq:m6} \\
+& D_j = C_j + \tau_{g(j)}, && \forall j \in \mathcal{J} \label{eq:m7} \\
+& T_j \ge D_j - d_{g(j)}, \quad T_j \ge 0, && \forall j \in \mathcal{J} \label{eq:m8} \\
+& d_{g(j)} - D_j + \mathcal{V}(1 - z_j) \ge 0, && \forall j \in \mathcal{J} \label{eq:m9} \\
+& U_r \ge \rho_r Q_r - \sum_{j: g(j)=r} q_j z_j, \quad U_r \ge 0, && \forall r \in \mathcal{R} \label{eq:m10} \\
+& X_{joh}, Y_{jo, iqh}, z_j \in \{0, 1\}, \quad S_{jo}, C_j, D_j \ge 0 && \forall j, i, o, q, h \label{eq:m11}
+\end{align}
+
+The mathematical logic of the SL-ISP model is interpreted as follows. The objective function minimizes the combined cost of operational tardiness and strategic service shortfall, weighted by coefficients $\alpha$ and $\beta$. Constraints \eqref{eq:m1}--\eqref{eq:m5} govern the flexible job-shop execution: \eqref{eq:m1} ensures that each operation is assigned to exactly one compatible machine; \eqref{eq:m2} and \eqref{eq:m3} enforce release time limits and linear precedence between consecutive operations of the same job; and the disjunctive constraints \eqref{eq:m4} and \eqref{eq:m5} activate machine-conflict sequencing only when two operations are assigned to the same machine, thereby preventing overlap without imposing artificial precedence on unassigned machine pairs. The integration layer is defined by \eqref{eq:m6}--\eqref{eq:m10}. Specifically, \eqref{eq:m6} and \eqref{eq:m7} map production completion to final delivery through entity-specific transportation delays $\tau_{g(j)}$. Job-level tardiness is quantified in \eqref{eq:m8}, whereas \eqref{eq:m9} activates the on-time indicator $z_j$ only if the delivery time $D_j$ respects the service cutoff $d_{g(j)}$. Finally, \eqref{eq:m10} linearizes the service shortfall $U_r$, which penalizes the unmet portion of the aggregate fulfillment requirement $\rho_r Q_r$ based on the contributions of all on-time jobs associated with entity $R_r$.
+
+\subsection{Structural Properties}
+\label{sec:structural_properties}
+
+To provide a principled basis for the proposed structure-guided learning framework, we analyze the online decision structure at any event-driven rescheduling point $t$. Let $Q_r^{del}(t)$ denote the cumulative on-time quantity of entity $r$ already completed by time $t$, and let
+\begin{equation}
+Q_r^{rem}(t)=\max(0,\rho_r Q_r-Q_r^{del}(t))
+\end{equation}
+denote the remaining quantity required to satisfy the service commitment. For each job $j$, we define the optimistic delivery lower bound
+\begin{equation}
+\underline{D}_j(t)=\max\{r_j,t\}+\sum_{o\in\mathcal{O}_j}\min_{m\in\mathcal{M}_{jo}} p_{jo}^m+\tau_{g(j)},
+\end{equation}
+which ignores future interference but respects release times, routing, and transportation delay. Based on these definitions, we derive recoverability conditions and a local priority switching rule that directly motivate the hierarchical control design.
+
+\begin{lemma}[Time-based Necessary Bound]
+\label{lemma:time_bound}
+A service entity $r$ can satisfy its minimum fulfillment requirement at time $t$ only if:
+\begin{equation}
+\sum_{j \in \mathcal{J}_r} q_j \cdot \mathbb{I}(\underline{D}_j(t) \le d_r) \ge Q_r^{rem}(t),
+\end{equation}
+where $\mathbb{I}(\cdot)$ is the indicator function and $Q_r^{rem}(t) = \max(0, \rho_r Q_r - Q_r^{del}(t))$ is the remaining shortfall relative to the current delivered quantity $Q_r^{del}(t)$.
+\end{lemma}
+
+\begin{pf}
+Let $Q_{r,\pi}^{\text{on-time}}(t)$ denote the total quantity of entity $r$ delivered no later than $d_r$ under an arbitrary continuation policy $\pi$ starting from time $t$. We have $Q_{r,\pi}^{\text{on-time}}(t) = \sum_{j \in \mathcal{J}_r} q_j \cdot \mathbb{I}(D_j^\pi \le d_r)$, where $D_j^\pi$ is the delivery time under $\pi$. Since $D_j^\pi \ge \underline{D}_j(t)$ for any feasible schedule, it follows that $\mathbb{I}(D_j^\pi \le d_r) \le \mathbb{I}(\underline{D}_j(t) \le d_r)$. Thus, $Q_{r,\pi}^{\text{on-time}}(t) \le \sum q_j \cdot \mathbb{I}(\underline{D}_j(t) \le d_r)$. If Eq. (1) is violated, then $Q_{r,\pi}^{\text{on-time}}(t) < Q_r^{rem}(t)$ is guaranteed for any policy $\pi$.
+\end{pf}
+
+
+\begin{lemma}[Capacity-based Necessary Screening]
+\label{lemma:capacity_bound}
+Let $\mathcal{W}_{\min}(r, t)$ denote an optimistic lower-bound workload surrogate required to cover $Q_r^{rem}(t)$ over a designated bottleneck resource set $\mathcal{M}_B$. A necessary condition for recoverability is:
+\begin{equation}
+\sum_{m \in \mathcal{M}_B} \text{Cap}(m, t, d_r) \ge \mathcal{W}_{\min}(r, t),
+\end{equation}
+where $\text{Cap}(m, t, d_r)$ represents the aggregate available processing time on machine $m$ within the window $[t, d_r]$.
+\end{lemma}
+
+\begin{pf}
+$\mathcal{W}_{\min}(r, t)$ is constructed as an optimistic surrogate, for instance, by selecting jobs with favorable quantity-to-workload ratios while ignoring setup and precedence constraints. Since any feasible schedule must satisfy the aggregate resource capacity over $\mathcal{M}_B$ to meet the service threshold, a violation of Eq. (2) renders the target unattainable.
+\end{pf}
+
+\begin{proposition}[Local Priority Switching Condition]
+\label{prop:priority}
+Given a local objective variation $\Delta Z = \alpha \Delta T_{total}(j) - \beta w_r \Delta U_r$, a service-oriented prioritization of job $j \in \mathcal{J}_r$ is locally preferred over an efficiency-oriented alternative whenever:
+\begin{equation}
+\frac{w_r \Delta U_r}{\Delta T_{total}(j)} > \frac{1}{\gamma}, \quad \text{where } \gamma = \beta/\alpha.
+\end{equation}
+\end{proposition}
+
+\begin{pf}
+A prioritization move is locally beneficial to the weighted cost if $\Delta Z < 0$. Rearranging $\alpha \Delta T_{total}(j) - \beta w_r \Delta U_r < 0$ yields the switching threshold in Eq. (3). 
+\end{pf}
+
+\subsubsection{Implications for Service-Pressure Allocation and Option Composition}
+
+The structural properties derived above provide the theoretical justification for the proposed SPA-OC control design:
+
+\begin{itemize}
+    \item \textbf{Continuous service-pressure estimation:} Lemmas \ref{lemma:time_bound} and \ref{lemma:capacity_bound} show that recoverability is not merely a binary feasibility attribute. Instead, the remaining fulfillment requirement, optimistic time feasibility, and bottleneck capacity jointly determine the marginal value of allocating additional processing attention to each service entity. This motivates a continuous zone-level service-pressure allocator rather than a discrete goal selector.
+    \item \textbf{Structured option synthesis:} Proposition \ref{prop:priority} implies that local control should balance service restoration and efficiency preservation according to state-contingent trade-offs. This motivates the use of an option composer that combines several structurally meaningful dispatching biases, instead of learning directly over a large primitive-action space.
+    \item \textbf{Progress-aware shaping and anticipatory representation:} The sensitivity of shortfall recovery near service cutoffs implies that terminal-only feedback is insufficient. This motivates dense progress-aware shaping and short-horizon predictive supervision, so that the learned representation remains responsive to evolving recoverability, congestion, and interference patterns.
+\end{itemize}
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Structure-Guided Service-Pressure Allocation with Option Composition}
+\label{subsec:spa_oc}
+
+The SL-ISP considered in this study exhibits three coupled decision characteristics. First, multiple service entities compete simultaneously for limited machine capacity, so the controller must determine how processing attention should be distributed across zones rather than merely selecting one currently preferred target. Second, the objective contains an explicit threshold effect, since the zone-level shortfall term depends on whether aggregate on-time fulfillment reaches the required ratio. Third, under dynamic arrivals and event-driven rescheduling, the future recoverability of each zone evolves with both current backlog and future interference. Therefore, the control problem is more naturally formulated as \emph{continuous service-pressure allocation plus structured local execution} than as conventional goal-conditioned hierarchical control.
+
+Motivated by this observation, we propose a structure-guided reinforcement learning framework called \emph{Service-Pressure Allocation with Option Composition} (SPA-OC). SPA-OC contains three coordinated components. A \emph{service-pressure allocator} first outputs a normalized zone-level pressure vector that represents the relative marginal service value of different zones. An \emph{option composer} then maps this global pressure profile to a convex combination of several normalized structured dispatching options. Finally, a \emph{deterministic execution projector} transforms the composed preference into a concrete executable scheduling action. In this way, the policy avoids direct exploration over the large combinatorial primitive-action space, while still preserving sufficient flexibility for event-driven local control.
+
+\subsubsection{State representation and shared heterogeneous encoder}
+
+At each event-driven decision epoch $t$, let $s_t$ denote the current scheduling state. All scalar features are normalized to $[0,1]$ within the current service window. To preserve the heterogeneous structure of the integrated scheduling environment, the state is represented by four categories of tokens:
+\begin{equation}
+\mathcal{X}_t=\{\mathcal{X}_t^{zone},\mathcal{X}_t^{mach},\mathcal{X}_t^{job},x_t^{glob}\}.
+\label{eq:spa_tokens}
+\end{equation}
+Here, $\mathcal{X}_t^{zone}$ contains one token for each zone $r\in\mathcal{R}$, $\mathcal{X}_t^{mach}$ contains one token for each machine $m\in\mathcal{M}$, $\mathcal{X}_t^{job}$ contains one token for each currently ready job, and $x_t^{glob}$ is a global token summarizing the event-level system context.
+
+For each zone $r$, the zone token is defined as
+\begin{equation}
+x_{r,t}^{zone}=
+\big[
+\bar Q_{r,t}^{del},
+\bar Q_{r,t}^{rem},
+\bar \Gamma_{r,t}^{rec},
+\bar \Xi_{r,t}^{cap},
+\bar \Delta_{r,t}^{ddl},
+\bar \Psi_{r,t}^{int},
+\bar w_r
+\big],
+\label{eq:zone_token}
+\end{equation}
+where $\bar Q_{r,t}^{del}$ and $\bar Q_{r,t}^{rem}$ denote normalized delivered and remaining required quantities, $\bar \Gamma_{r,t}^{rec}$ is an optimistic recoverability descriptor, $\bar \Xi_{r,t}^{cap}$ is a capacity-screening indicator, $\bar \Delta_{r,t}^{ddl}$ measures deadline tightness, $\bar \Psi_{r,t}^{int}$ is an interference proxy, and $\bar w_r$ is the normalized service importance.
+
+For each machine $m$, the machine token is defined as
+\begin{equation}
+x_{m,t}^{mach}=
+\big[
+\bar I_{m,t}^{idle},
+\bar B_{m,t}^{busy},
+\bar L_{m,t}^{load},
+\bar \chi_m^{bn}
+\big],
+\label{eq:mach_token}
+\end{equation}
+where the features represent idle status, remaining busy time, load level, and bottleneck relevance, respectively.
+
+For each ready job $j$, the job token is defined as
+\begin{equation}
+x_{j,t}^{job}=
+\big[
+\bar P_{j,t}^{rem},
+\bar S_{j,t}^{opt},
+\bar q_j,
+\bar R_{j,t}^{rel},
+\bar \tau_{g(j)},
+\bar O_{j,t}^{rem}
+\big],
+\label{eq:job_token}
+\end{equation}
+where $\bar P_{j,t}^{rem}$ is the normalized remaining processing workload, $\bar S_{j,t}^{opt}$ is the optimistic delivery slack, $\bar q_j$ is the normalized quantity contribution, $\bar R_{j,t}^{rel}$ is the release-readiness feature, $\bar \tau_{g(j)}$ is the normalized transportation delay, and $\bar O_{j,t}^{rem}$ is the normalized number of unfinished operations.
+
+The global token is defined as
+\begin{equation}
+x_t^{glob}=
+\big[
+\bar t,
+\bar N_t^{ready},
+\bar N_t^{idle},
+\bar H_t^{arr},
+\bar H_t^{risk}
+\big],
+\label{eq:global_token}
+\end{equation}
+where $\bar t$ is the normalized decision time, $\bar N_t^{ready}$ is the number of ready jobs, $\bar N_t^{idle}$ is the number of currently idle machines, $\bar H_t^{arr}$ measures recent arrival pressure, and $\bar H_t^{risk}$ summarizes the global service-risk level.
+
+All tokens are processed by a shared heterogeneous event encoder $E_{\phi}(\cdot)$, which yields a latent representation
+\begin{equation}
+h_t=E_{\phi}(\mathcal{X}_t).
+\label{eq:shared_encoder}
+\end{equation}
+The encoder is shared by the service-pressure allocator, the option composer, the critic heads, and the auxiliary predictor.
+
+\subsubsection{Service-pressure allocation}
+
+The upper control layer allocates service pressure across all zones simultaneously. Let $z_t=\{z_{r,t}\}_{r\in\mathcal{R}}$ denote the zone-level summary extracted from $h_t$, where
+\begin{equation}
+z_{r,t}=
+\big[
+\bar Q_{r,t}^{rem},
+\bar \Gamma_{r,t}^{rec},
+\bar \Xi_{r,t}^{cap},
+\bar \Delta_{r,t}^{ddl},
+\bar \Psi_{r,t}^{int},
+\bar Q_{r,t}^{del}
+\big].
+\label{eq:zone_summary}
+\end{equation}
+The allocator outputs a normalized service-pressure vector
+\begin{equation}
+\lambda_t=\pi_{\theta}^{A}(z_t), \qquad \lambda_t\in\Delta^{|\mathcal{R}|},
+\label{eq:lambda_alloc}
+\end{equation}
+where $\Delta^{|\mathcal{R}|}$ is the probability simplex. The component $\lambda_{r,t}$ is interpreted as a \emph{learned surrogate of the marginal service value} of zone $r$, namely the relative urgency of assigning additional processing opportunity to that zone under the current global state.
+
+To support stochastic off-policy training while respecting the simplex constraint, the allocator is parameterized as a Logistic-Normal policy:
+\begin{equation}
+u_t^{A}\sim \mathcal{N}(\mu_t^{A},\Sigma_t^{A}), \qquad
+\lambda_t=\mathrm{softmax}(u_t^{A}),
+\label{eq:lambda_logistic_normal}
+\end{equation}
+where $(\mu_t^{A},\Sigma_t^{A})$ are produced by the allocator network from $z_t$.
+
+\subsubsection{Option composition over normalized structured bases}
+
+Conditioned on the global pressure vector $\lambda_t$, the second decision layer outputs a convex combination over a finite set of structured control options:
+\begin{equation}
+\omega_t=\pi_{\psi}^{C}(s_t,\lambda_t), \qquad \omega_t\in\Delta^{K},
+\label{eq:omega_comp}
+\end{equation}
+where $\Delta^K$ is the $K$-dimensional probability simplex. The composer is also parameterized as a Logistic-Normal policy:
+\begin{equation}
+u_t^{C}\sim \mathcal{N}(\mu_t^{C},\Sigma_t^{C}), \qquad
+\omega_t=\mathrm{softmax}(u_t^{C}).
+\label{eq:omega_logistic_normal}
+\end{equation}
+
+Each option $k\in\{1,\ldots,K\}$ is represented by a structured action-scoring basis $\phi_k(a,s_t,\lambda_t)$ evaluated over the feasible action set $\mathcal{A}_t\cup\{\mathrm{wait}\}$. To ensure cross-option comparability, each basis is normalized state-wise as
+\begin{equation}
+\bar{\phi}_k(a,s_t,\lambda_t)=
+\frac{
+\phi_k(a,s_t,\lambda_t)-\min_{a' \in \mathcal{A}_t\cup\{\mathrm{wait}\}}\phi_k(a',s_t,\lambda_t)
+}{
+\max_{a' \in \mathcal{A}_t\cup\{\mathrm{wait}\}}\phi_k(a',s_t,\lambda_t)
+-\min_{a' \in \mathcal{A}_t\cup\{\mathrm{wait}\}}\phi_k(a',s_t,\lambda_t)+\epsilon
+},
+\label{eq:normalized_option_basis}
+\end{equation}
+where $\epsilon>0$ is a small constant. The composed score is then defined as
+\begin{equation}
+S(a\mid s_t,\lambda_t,\omega_t)=
+\sum_{k=1}^{K}\omega_{t,k}\bar{\phi}_k(a,s_t,\lambda_t).
+\label{eq:score_composed}
+\end{equation}
+
+The option set is intentionally kept small and structurally meaningful. Typical options correspond to shortfall recovery, deadline-pressure control, bottleneck relief, slack-per-work efficiency, release-aware anticipation, and transport-aware completion. Thus, the composer is not a generic heuristic mixer, but an option-level policy class that synthesizes multiple interpretable control biases under different system conditions.
+
+\subsubsection{Deterministic execution projection}
+
+Given the composed score landscape, the final layer projects the latent decision $(\lambda_t,\omega_t)$ to a concrete executable scheduling action:
+\begin{equation}
+a_t=g(s_t,\lambda_t,\omega_t)=
+\arg\max_{a\in\mathcal{A}_t\cup\{\mathrm{wait}\}}
+S(a\mid s_t,\lambda_t,\omega_t).
+\label{eq:project_action}
+\end{equation}
+This execution projector is intentionally non-learnable. Its role is to compress the primitive scheduling action space faced by the trainable policy, so that learning concentrates on the lower-dimensional decisions of service-pressure allocation and option composition.
+
+\subsubsection{Risk-decomposed soft critic and progress-aware reward shaping}
+
+Let $u_t=(\lambda_t,\omega_t)$ denote the latent control pair. Since SPA-OC is trained off-policy, we parameterize a decomposed soft action-value critic rather than a single scalar state critic. Specifically, three critic heads are learned:
+\begin{equation}
+Q_{\nu}^{tot}(s_t,u_t)=
+Q_{\nu}^{tar}(s_t,u_t)
++
+Q_{\nu}^{shr}(s_t,u_t)
++
+\eta Q_{\nu}^{risk}(s_t,u_t),
+\label{eq:q_total}
+\end{equation}
+where $Q_{\nu}^{tar}$ estimates tardiness-related value, $Q_{\nu}^{shr}$ estimates shortfall-related value, and $Q_{\nu}^{risk}$ models tail service-failure risk.
+
+The instantaneous reward is decomposed as
+\begin{equation}
+r_t=r_t^{tar}+r_t^{shr}+r_t^{risk},
+\label{eq:reward_decomp}
+\end{equation}
+with
+\begin{equation}
+r_t^{tar}=-\alpha \Delta T_t,
+\label{eq:reward_tar}
+\end{equation}
+\begin{equation}
+r_t^{shr}=-\beta \Delta U_t+\kappa_{\Phi}\big(\Phi(s_{t+1})-\Phi(s_t)\big),
+\label{eq:reward_shr}
+\end{equation}
+and
+\begin{equation}
+r_t^{risk}=-\xi \Delta R_t^{risk},
+\label{eq:reward_risk}
+\end{equation}
+where $\xi>0$ is a risk penalty coefficient distinct from the discount factor. Here,
+\begin{equation}
+\Delta U_t=
+\sum_{r\in\mathcal{R}}w_r\big(U_{r,t+1}-U_{r,t}\big)
+\label{eq:deltaU}
+\end{equation}
+captures the weighted service-shortfall variation, and the shaping potential is defined as
+\begin{equation}
+\Phi(s_t)=
+-\sum_{r\in\mathcal{R}} w_r
+\Big(
+\bar Q_{r,t}^{rem}
++ c_1[1-\bar \Gamma_{r,t}^{rec}]_{+}
++ c_2 \bar \Delta_{r,t}^{ddl}
+\Big),
+\label{eq:potential_shaping}
+\end{equation}
+where $c_1,c_2\ge 0$ and $[x]_+=\max(0,x)$. This potential-based shaping densifies the service signal while preserving the long-run optimization direction.
+
+To characterize imminent service failure, we define a short-horizon risk descriptor
+\begin{equation}
+R_t^{risk}=
+\sum_{r\in\mathcal{R}}
+w_r
+\big[
+Q_{r,t}^{rem}-\widehat{Q}_{r,t}^{rec}(H)
+\big]_{+},
+\label{eq:risk_descriptor}
+\end{equation}
+where $\widehat{Q}_{r,t}^{rec}(H)$ denotes the predicted recoverable on-time quantity of zone $r$ within the next $H$ event steps. The corresponding risk head is trained toward a CVaR-style target:
+\begin{equation}
+Q_{\nu}^{risk}(s_t,u_t)\approx
+\mathrm{CVaR}_{\alpha_c}\!\left(
+\sum_{\tau=t}^{T}\gamma^{\tau-t}r_{\tau}^{risk}
+\;\middle|\;
+s_t,u_t
+\right),
+\label{eq:cvar_target}
+\end{equation}
+where $\alpha_c\in(0,1)$ is the confidence level.
+
+\subsubsection{Prediction-enhanced representation learning}
+
+To improve anticipatory capability under dynamic arrivals, we further introduce short-horizon auxiliary prediction tasks. Based on the encoded state $h_t$, the predictor estimates three quantities over the next $H$ decision events:
+\begin{equation}
+\hat y_t^{(1)}:\ \text{future shortfall-gap change}, \qquad
+\hat y_t^{(2)}:\ \text{future slack deterioration}, \qquad
+\hat y_t^{(3)}:\ \text{future bottleneck congestion rise}.
+\label{eq:prediction_targets}
+\end{equation}
+Let $y_t^{(1)},y_t^{(2)},y_t^{(3)}$ denote the observed targets. The auxiliary prediction loss is
+\begin{equation}
+\mathcal{L}_{pred}=
+\sum_{q=1}^{3}
+\left\|
+\hat y_t^{(q)}-y_t^{(q)}
+\right\|_2^2.
+\label{eq:pred_loss}
+\end{equation}
+This predictor is used only to stabilize representation learning; it does not replace the main control policy with an explicit world model.
+
+\subsubsection{Sequence-based off-policy learning objective}
+\label{subsubsec:spa_training}
+
+Because SL-ISP is event-driven and the service consequence of a local dispatching move may emerge only after several subsequent decisions, SPA-OC is trained from replayed transition sequences rather than isolated one-step samples. Each stored sequence has the form
+\begin{equation}
+\mathcal{B}_i=
+\big\{
+(s_t,\lambda_t,\omega_t,a_t,r_t,s_{t+1})
+\big\}_{t=t_i}^{t_i+L-1},
+\label{eq:seq_buffer}
+\end{equation}
+where $L$ is the sequence length and $a_t=g(s_t,\lambda_t,\omega_t)$ is the realized projected action.
+
+For the tardiness and shortfall heads, the one-step soft bootstrap targets are
+\begin{equation}
+y_t^{tar}=r_t^{tar}
++ \gamma
+\Big(
+\bar Q^{tar}(s_{t+1},u_{t+1}')
+- \alpha_A \log \pi_{\theta}^{A}(\lambda_{t+1}'\mid z_{t+1})
+- \alpha_C \log \pi_{\psi}^{C}(\omega_{t+1}'\mid s_{t+1},\lambda_{t+1}')
+\Big),
+\label{eq:target_tar}
+\end{equation}
+\begin{equation}
+y_t^{shr}=r_t^{shr}
++ \gamma
+\Big(
+\bar Q^{shr}(s_{t+1},u_{t+1}')
+- \alpha_A \log \pi_{\theta}^{A}(\lambda_{t+1}'\mid z_{t+1})
+- \alpha_C \log \pi_{\psi}^{C}(\omega_{t+1}'\mid s_{t+1},\lambda_{t+1}')
+\Big),
+\label{eq:target_shr}
+\end{equation}
+where $u_{t+1}'=(\lambda_{t+1}',\omega_{t+1}')$ is resampled from the current allocator and composer, and $\bar Q^{tar},\bar Q^{shr}$ are target critics. For the risk head, we use the empirical tail target
+\begin{equation}
+y_t^{risk}=
+\widehat{\mathrm{CVaR}}_{\alpha_c}
+\Big(
+r_t^{risk}+\gamma \bar Q^{risk}(s_{t+1},u_{t+1}')
+\Big).
+\label{eq:target_risk}
+\end{equation}
+
+The decomposed critic loss is
+\begin{equation}
+\mathcal{L}_{critic}=
+\mathbb{E}_{\mathcal{B}_i\sim \mathcal{D}}
+\Big[
+\big(Q^{tar}_{\nu}(s_t,u_t)-y_t^{tar}\big)^2
++
+\big(Q^{shr}_{\nu}(s_t,u_t)-y_t^{shr}\big)^2
++
+\eta\big(Q^{risk}_{\nu}(s_t,u_t)-y_t^{risk}\big)^2
+\Big].
+\label{eq:critic_loss}
+\end{equation}
+
+To achieve clearer credit separation between the two policy layers, the allocator and composer are updated with decoupled soft actor objectives. During allocator update, the composer sample is treated as a stop-gradient control variable:
+\begin{equation}
+\mathcal{L}_{alloc}=
+\mathbb{E}_{s_t\sim\mathcal{D},\lambda_t\sim\pi_{\theta}^{A}}
+\Big[
+\alpha_A \log \pi_{\theta}^{A}(\lambda_t\mid z_t)
+- Q_{\nu}^{tot}(s_t,\lambda_t,\omega_t^{\dagger})
+\Big],
+\label{eq:alloc_loss}
+\end{equation}
+where $\omega_t^{\dagger}\sim\pi_{\psi}^{C}(\cdot\mid s_t,\lambda_t)$ and ${}^{\dagger}$ denotes stop-gradient. Similarly, during composer update the allocator output is detached:
+\begin{equation}
+\mathcal{L}_{compose}=
+\mathbb{E}_{s_t\sim\mathcal{D},\omega_t\sim\pi_{\psi}^{C}}
+\Big[
+\alpha_C \log \pi_{\psi}^{C}(\omega_t\mid s_t,\lambda_t^{\dagger})
+- Q_{\nu}^{tot}(s_t,\lambda_t^{\dagger},\omega_t)
+\Big].
+\label{eq:compose_loss}
+\end{equation}
+
+The overall learning objective is
+\begin{equation}
+\mathcal{L}=
+\mathcal{L}_{critic}
++
+\mathcal{L}_{alloc}
++
+\mathcal{L}_{compose}
++
+\alpha_p \mathcal{L}_{pred},
+\label{eq:total_loss}
+\end{equation}
+where $\alpha_A,\alpha_C,\alpha_p\ge 0$ are temperature or weighting coefficients.
+
+\begin{algorithm}[t]
+\caption{Training procedure of SPA-OC}
+\label{alg:spa_oc}
+\begin{algorithmic}[1]
+\STATE Initialize shared encoder $E_{\phi}$, allocator $\pi_{\theta}^{A}$, composer $\pi_{\psi}^{C}$, decomposed critic $Q_{\nu}$, predictor $P_{\xi}$, target critic $\bar Q_{\nu}$, and replay buffer $\mathcal{D}$
+\FOR{episode $=1$ to $N_{epi}$}
+    \STATE Reset environment and obtain initial state $s_0$
+    \FOR{each event-driven decision epoch $t$}
+        \STATE Encode heterogeneous tokens and compute $h_t=E_{\phi}(\mathcal{X}_t)$
+        \STATE Extract zone summaries $z_t$ and sample $\lambda_t\sim\pi_{\theta}^{A}(\cdot\mid z_t)$
+        \STATE Sample option weights $\omega_t\sim\pi_{\psi}^{C}(\cdot\mid s_t,\lambda_t)$
+        \STATE Compute normalized option scores $\bar{\phi}_k(a,s_t,\lambda_t)$ for all $a\in\mathcal{A}_t\cup\{\mathrm{wait}\}$
+        \STATE Select projected action $a_t=g(s_t,\lambda_t,\omega_t)$ by Eq.~\eqref{eq:project_action}
+        \STATE Execute $a_t$, observe decomposed reward $(r_t^{tar},r_t^{shr},r_t^{risk})$ and next state $s_{t+1}$
+        \STATE Store $(s_t,\lambda_t,\omega_t,a_t,r_t,s_{t+1})$ into $\mathcal{D}$
+        \IF{update condition is satisfied}
+            \STATE Sample a mini-batch of sequences $\{\mathcal{B}_i\}$ from $\mathcal{D}$
+            \STATE Compute soft targets $y_t^{tar},y_t^{shr},y_t^{risk}$ using Eqs.~\eqref{eq:target_tar}--\eqref{eq:target_risk}
+            \STATE Update the decomposed critic by minimizing $\mathcal{L}_{critic}$
+            \STATE Update the allocator by minimizing $\mathcal{L}_{alloc}$ with detached composer samples
+            \STATE Update the composer by minimizing $\mathcal{L}_{compose}$ with detached allocator samples
+            \STATE Update the auxiliary predictor by minimizing $\mathcal{L}_{pred}$
+            \STATE Soft-update the target critic $\bar Q_{\nu}$
+        \ENDIF
+        \IF{terminal condition is reached}
+            \STATE break
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+Compared with goal-conditioned hierarchical control, SPA-OC differs in three essential respects. First, the upper-level controller no longer selects one target entity, but allocates service pressure across all zones simultaneously. Second, the tactical controller no longer executes a target-conditioned primitive policy, but composes normalized structured options to generate a dispatching preference landscape. Third, the structural properties are no longer used mainly for feasibility masking, but for marginal service-pressure estimation, progress-aware shaping, and anticipatory representation learning.
+
+\end{document}

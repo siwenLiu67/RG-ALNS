@@ -1,0 +1,352 @@
+\section{Problem description and structural analysis}
+\label{sec:problem_theory}
+
+\subsection{Problem description}
+
+The Service-Level-Aware Integrated Scheduling Problem (SL-ISP) considers a finite service window containing a set of jobs $\mathcal J=\{1,\dots,n\}$ to be processed on a set of flexible machines $\mathcal M=\{1,\dots,m\}$. Each job $j\in\mathcal J$ belongs to a service entity (zone) identified by the mapping $g(j)\in\mathcal R$, where $\mathcal R=\{1,\dots,|\mathcal R|\}$ is the set of service entities. Job $j$ is characterized by its release time $r_j\ge 0$, its quantity contribution $q_j>0$, and a linearly ordered sequence of $n_j$ operations $\mathcal O_j=\{O_{j1},O_{j2},\dots,O_{j,n_j}\}$. Operation $O_{jo}$ can be processed on any machine $h$ from a job- and operation-specific eligible set $\mathcal M_{jo}\subseteq\mathcal M$, with machine-dependent processing time $p_{joh}>0$. Operations within each job obey strict linear precedence; operations belonging to different jobs may be processed concurrently subject to machine availability. Preemption is not permitted.
+
+Each service entity $r\in\mathcal R$ carries a service-level commitment defined by four parameters: a common delivery deadline $d_r$, a deterministic transportation delay $\tau_r\ge 0$, a minimum required fulfillment ratio $\rho_r\in(0,1]$, and a relative importance weight $w_r>0$. The aggregate committed quantity for entity $r$ is
+\begin{equation}
+Q_r=\sum_{j:g(j)=r} q_j,
+\end{equation}
+and the minimum required on-time quantity is
+\begin{equation}
+Q_r^{min}=\rho_r Q_r.
+\end{equation}
+
+Let $C_j$ denote the production completion time of the final operation of job $j$. Incorporating the entity-specific transport delay, the delivery time is
+\begin{equation}
+D_j=C_j+\tau_{g(j)}.
+\end{equation}
+Job $j$ is considered on time if $D_j\le d_{g(j)}$; otherwise it incurs tardiness
+\begin{equation}
+T_j=[D_j-d_{g(j)}]_+,
+\end{equation}
+where $[x]_+=\max(0,x)$. The total on-time fulfilled quantity of entity $r$ is
+\begin{equation}
+Q_r^{on}=\sum_{j:g(j)=r,\;D_j\le d_r} q_j,
+\end{equation}
+and the service shortfall is
+\begin{equation}
+U_r=[Q_r^{min}-Q_r^{on}]_+.
+\end{equation}
+
+The system operates under event-driven rescheduling. At each decision epoch---triggered by a job release, an operation completion, or a machine becoming idle---the scheduler assigns a waiting operation to an available machine or deliberately leaves the machine idle. The objective integrates operational efficiency and strategic service-level attainment:
+\begin{equation}\label{eq:objective}
+\min Z=\alpha\sum_{j\in\mathcal J}T_j+\beta\sum_{r\in\mathcal R}w_r U_r,
+\end{equation}
+where $\alpha,\beta>0$ are weighting coefficients that encode the relative cost of unit tardiness versus unit weighted shortfall. The coefficient $\gamma=\beta/\alpha$ captures the service-pressure ratio: larger $\gamma$ places greater emphasis on meeting entity-level service commitments.
+
+\subsection{Complexity of zero-shortfall service fulfillment}
+\label{sec:complexity}
+
+A central structural question is whether the scheduler can achieve zero shortfall ($U_r=0$ for all $r$) for a given instance. Even in a maximally restricted setting, this decision problem is computationally intractable.
+
+\begin{definition}[Restricted Zero-Shortfall Service Fulfillment Problem]
+\label{def:rzssfp}
+An instance of the Restricted Zero-Shortfall Service Fulfillment Problem (RZSSFP) is specified by: one service entity, a single machine, a set of single-operation jobs $\mathcal J$ all released at time zero, zero transportation delay, and a common deadline $D$. Each job $j\in\mathcal J$ has processing time $p_j$ and quantity $q_j$. The required on-time quantity is $Q$. The question is: does there exist a subset of jobs whose total processing time does not exceed $D$ and whose total quantity is at least $Q$?
+\end{definition}
+
+\begin{theorem}\label{thm:np_complete}
+RZSSFP is NP-complete.
+\end{theorem}
+
+\begin{pf}
+\textbf{Membership in NP.} A certificate consists of a subset $S\subseteq\mathcal J$. Verification requires checking $\sum_{j\in S}p_j\le D$ and $\sum_{j\in S}q_j\ge Q$, both computable in $O(|\mathcal J|)$ time.
+
+\medskip\noindent\textbf{NP-hardness.} We reduce from the 0-1 Knapsack Decision Problem (KDP), which is well known to be NP-complete (Garey and Johnson, 1979). An instance of KDP consists of $n$ items, each with weight $w_i$ and value $v_i$, a knapsack capacity $W$, and a target value $V$. The question is whether there exists a subset $S\subseteq\{1,\dots,n\}$ such that $\sum_{i\in S}w_i\le W$ and $\sum_{i\in S}v_i\ge V$.
+
+Construct an RZSSFP instance as follows. For each item $i$ in the KDP instance, create a job $j$ with $p_j=w_i$, $q_j=v_i$, and $r_j=0$. Set the common deadline $D=W$, the required on-time quantity $Q=V$, and the transport delay $\tau=0$. In this single-machine setting with all jobs available at time zero, a set of jobs completes by $D$ if and only if the sum of their processing times does not exceed $D$. Hence the KDP instance admits a feasible subset if and only if the constructed RZSSFP instance admits zero shortfall. The reduction requires $O(n)$ time.
+
+Since RZSSFP is in NP and is NP-hard, it is NP-complete.
+\end{pf}
+
+Theorem \ref{thm:np_complete} establishes that even the simplest special case of zero-shortfall verification is computationally intractable. This justifies the use of heuristic and metaheuristic methods for the full SL-ISP, and motivates the development of computationally efficient surrogate indicators---rather than exact feasibility tests---for guiding online scheduling decisions.
+
+\subsection{Optimistic service-recovery relaxation}
+\label{sec:optimistic_relaxation}
+
+To enable tractable online diagnosis of service recoverability, we introduce an optimistic relaxation that ignores future job releases, inter-machine interference, and sequencing constraints beyond a designated bottleneck resource set $\mathcal B\subseteq\mathcal M$. The set $\mathcal B$ models the \emph{unavoidable resource pool}: machines whose capacity is structurally constrained and through which recovery-oriented jobs must pass. Typical choices for $\mathcal B$ include the set of machines with the highest average utilization, or machines that are uniquely eligible for a large fraction of operations.
+
+At any decision time $t$ during online execution, we define the following state-dependent quantities:
+
+\begin{itemize}
+    \item $Q_r^{sec}(t)$: \textbf{secured on-time quantity} of entity $r$---the total quantity of entity-$r$ jobs already delivered with $D_j\le d_r$ by time $t$.
+    \item $Q_r^{rem}(t)=[Q_r^{min}-Q_r^{sec}(t)]_+$: \textbf{remaining required quantity} for entity $r$.
+    \item $\underline D_j(t)$: \textbf{optimistic delivery time lower bound} for job $j$. For a job whose remaining operations at time $t$ are $\mathcal O_j^{rem}(t)$, we define
+    \begin{equation}\label{eq:opt_delivery}
+    \underline D_j(t)=t+\sum_{o\in\mathcal O_j^{rem}(t)}\min_{h\in\mathcal M_{jo}}\,p_{joh}+\tau_{g(j)},
+    \end{equation}
+    where the processing time of a partially completed operation is replaced by its residual. This bound assumes zero waiting time and the fastest eligible machine for every operation.
+    \item $\mathcal E_r(t)=\{j\in\mathcal J:g(j)=r,\;\underline D_j(t)\le d_r\}$: the \textbf{eligible set}---jobs of entity $r$ that can optimistically meet the deadline $d_r$.
+    \item $\operatorname{Cap}_{\mathcal B}(t,d_r)=\sum_{h\in\mathcal B}\operatorname{Cap}_h(t,d_r)$: \textbf{aggregate available bottleneck capacity} during the interval $[t,d_r]$, where $\operatorname{Cap}_h(t,d_r)$ is the remaining processing time on machine $h$ net of already-committed workload within $[t,d_r]$.
+    \item $\underline w_{j,\mathcal B}(t)$: \textbf{minimum bottleneck workload} of job $j$, defined as
+    \begin{equation}\label{eq:min_bottleneck_work}
+    \underline w_{j,\mathcal B}(t)=\sum_{o\in\mathcal O_j^{rem}(t)}\;\min_{h\in\mathcal B\cap\mathcal M_{jo}}\,p_{joh},
+    \end{equation}
+    with the convention that $\min_{h\in\emptyset}\,p_{joh}=0$. This is the smallest total processing time that job $j$ must consume on machines in $\mathcal B$ to complete its remaining operations.
+\end{itemize}
+
+These definitions support two complementary knapsack-type optimization problems. The \textbf{minimum-workload recovery problem} seeks the smallest bottleneck workload required to assemble enough on-time quantity:
+\begin{equation}\label{eq:min_workload}
+W_{r,\mathcal B}^{min}(t)=
+\min\;\sum_{j\in\mathcal E_r(t)}\underline w_{j,\mathcal B}(t)\,y_j
+\end{equation}
+subject to
+\begin{equation}
+\sum_{j\in\mathcal E_r(t)}q_j\,y_j\ge Q_r^{rem}(t),\qquad y_j\in\{0,1\}.
+\end{equation}
+If no subset of $\mathcal E_r(t)$ can meet the quantity requirement, we set $W_{r,\mathcal B}^{min}(t)=+\infty$.
+
+The \textbf{maximum recoverable service quantity problem} maximizes the on-time deliverable quantity subject to the bottleneck capacity constraint:
+\begin{equation}\label{eq:max_recoverable}
+\overline Q_{r,\mathcal B}^{rec}(t)=
+\max\;\sum_{j\in\mathcal E_r(t)}q_j\,z_j
+\end{equation}
+subject to
+\begin{equation}
+\sum_{j\in\mathcal E_r(t)}\underline w_{j,\mathcal B}(t)\,z_j\le\operatorname{Cap}_{\mathcal B}(t,d_r),\qquad z_j\in\{0,1\}.
+\end{equation}
+
+Problems \eqref{eq:min_workload} and \eqref{eq:max_recoverable} form a dual pair of 0-1 knapsack problems: the former minimizes workload for a given quantity target, while the latter maximizes quantity for a given workload budget. Both can be solved in pseudo-polynomial time via standard dynamic programming, making them suitable for repeated online evaluation at each rescheduling epoch.
+
+\subsection{Dual knapsack characterizations}
+\label{sec:dual_knapsack}
+
+The following theorem establishes the formal equivalence between the two optimistic recoverability indicators.
+
+\begin{theorem}[Equivalent characterizations of optimistic zero-shortfall recoverability]\label{thm:dual_knapsack}
+For any entity $r\in\mathcal R$ at any decision time $t$,
+\begin{equation}\label{eq:equivalence}
+W_{r,\mathcal B}^{min}(t)\le\operatorname{Cap}_{\mathcal B}(t,d_r)
+\quad\iff\quad
+\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t).
+\end{equation}
+\end{theorem}
+
+\begin{pf}
+\noindent\textit{($\Rightarrow$)} Assume $W_{r,\mathcal B}^{min}(t)\le\operatorname{Cap}_{\mathcal B}(t,d_r)$. Let $y^*$ be an optimal solution to problem \eqref{eq:min_workload}. Then
+\[
+\sum_{j\in\mathcal E_r(t)}\underline w_{j,\mathcal B}(t)\,y_j^*=W_{r,\mathcal B}^{min}(t)\le\operatorname{Cap}_{\mathcal B}(t,d_r)
+\]
+and $\sum_{j\in\mathcal E_r(t)}q_j y_j^*\ge Q_r^{rem}(t)$. Defining $z_j=y_j^*$ for all $j\in\mathcal E_r(t)$, the vector $z$ satisfies the capacity constraint of problem \eqref{eq:max_recoverable} and yields objective value at least $Q_r^{rem}(t)$. Since $\overline Q_{r,\mathcal B}^{rec}(t)$ is the maximum over all feasible solutions,
+\[
+\overline Q_{r,\mathcal B}^{rec}(t)\ge\sum_{j}q_j z_j\ge Q_r^{rem}(t).
+\]
+
+\medskip\noindent\textit{($\Leftarrow$)} Assume $\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)$. Let $z^*$ be an optimal solution to problem \eqref{eq:max_recoverable}. Then
+\[
+\sum_{j\in\mathcal E_r(t)}q_j z_j^*=\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)
+\]
+and $\sum_{j\in\mathcal E_r(t)}\underline w_{j,\mathcal B}(t)\,z_j^*\le\operatorname{Cap}_{\mathcal B}(t,d_r)$. Defining $y_j=z_j^*$ for all $j\in\mathcal E_r(t)$, the vector $y$ satisfies the quantity constraint of problem \eqref{eq:min_workload} and is therefore a feasible---but not necessarily optimal---solution. Hence
+\[
+W_{r,\mathcal B}^{min}(t)\le\sum_{j}\underline w_{j,\mathcal B}(t)\,z_j^*\le\operatorname{Cap}_{\mathcal B}(t,d_r).
+\]
+
+Both directions hold, establishing the equivalence.
+\end{pf}
+
+Theorem \ref{thm:dual_knapsack} provides two computationally complementary routes for evaluating optimistic recoverability. One may either check whether the minimum required workload fits within the remaining bottleneck capacity (workload view), or whether the maximum recoverable quantity meets the remaining requirement (quantity view). Both characterizations are exact with respect to the optimistic relaxation and yield identical yes/no answers. In practice, the quantity-maximization formulation \eqref{eq:max_recoverable} is often more convenient, as $\operatorname{Cap}_{\mathcal B}(t,d_r)$ is directly observable from the schedule state.
+
+\subsection{Unavoidable service shortfall lower bound}
+\label{sec:shortfall_lower_bound}
+
+While the optimistic relaxation neglects sequencing interference and machine contention, the quantity $\overline Q_{r,\mathcal B}^{rec}(t)$ nonetheless yields a valid lower bound on the shortfall achievable by any feasible continuation of the current schedule.
+
+\begin{theorem}[Unavoidable shortfall lower bound]\label{thm:unavoidable_shortfall}
+For any feasible continuation schedule $\pi$ from time $t$, the service shortfall of entity $r$ satisfies
+\begin{equation}\label{eq:shortfall_bound}
+U_r^\pi\ge\underline U_{r,\mathcal B}(t)=\big[Q_r^{rem}(t)-\overline Q_{r,\mathcal B}^{rec}(t)\big]_+.
+\end{equation}
+\end{theorem}
+
+\begin{pf}
+Let $\mathcal J_{r}^{on}(\pi)\subseteq\mathcal E_r(t)$ denote the set of entity-$r$ jobs that are not yet delivered at time $t$ but are delivered on time ($D_j^\pi\le d_r$) under continuation $\pi$. Every such job must complete its remaining operations, and the total workload assigned to machines in $\mathcal B$ cannot exceed the available capacity during $[t,d_r]$. Therefore
+\[
+\sum_{j\in\mathcal J_{r}^{on}(\pi)}\underline w_{j,\mathcal B}(t)\le\operatorname{Cap}_{\mathcal B}(t,d_r),
+\]
+which means the indicator vector of $\mathcal J_{r}^{on}(\pi)$ is a feasible solution to the maximum recoverable service quantity problem \eqref{eq:max_recoverable}. Consequently,
+\[
+\sum_{j\in\mathcal J_{r}^{on}(\pi)}q_j\le\overline Q_{r,\mathcal B}^{rec}(t).
+\]
+
+The total on-time quantity delivered under $\pi$ is $Q_r^{sec}(t)+\sum_{j\in\mathcal J_{r}^{on}(\pi)}q_j$. The resulting shortfall is
+\begin{align}
+U_r^\pi&=\big[Q_r^{min}-Q_r^{sec}(t)-\sum_{j\in\mathcal J_{r}^{on}(\pi)}q_j\big]_+\nonumber\\
+&=\big[Q_r^{rem}(t)-\sum_{j\in\mathcal J_{r}^{on}(\pi)}q_j\big]_+\nonumber\\
+&\ge\big[Q_r^{rem}(t)-\overline Q_{r,\mathcal B}^{rec}(t)\big]_+=\underline U_{r,\mathcal B}(t),\nonumber
+\end{align}
+where the inequality follows from $\sum_{j\in\mathcal J_{r}^{on}(\pi)}q_j\le\overline Q_{r,\mathcal B}^{rec}(t)$ and the monotonicity of $[\cdot]_+$.
+\end{pf}
+
+Theorem \ref{thm:unavoidable_shortfall} is structural rather than algorithmic: it does not require solving the full scheduling problem to evaluate the bound. Instead, the lower bound $\underline U_{r,\mathcal B}(t)$ is obtained by solving a single 0-1 knapsack problem per entity. This yields a computationally lightweight certificate that is valid for \emph{all} feasible continuations.
+
+\begin{corollary}[Unattainability of zero shortfall]\label{cor:zero_unattainable}
+If $\overline Q_{r,\mathcal B}^{rec}(t)<Q_r^{rem}(t)$ at time $t$, then $\underline U_{r,\mathcal B}(t)>0$, and by Theorem~\ref{thm:unavoidable_shortfall}, $U_r^\pi>0$ for every feasible continuation schedule $\pi$. Thus, zero shortfall for entity $r$ is provably unattainable regardless of future scheduling decisions.
+\end{corollary}
+
+Corollary~\ref{cor:zero_unattainable} provides an early and computable certificate of unavoidable service failure. When triggered, it enables the scheduler to reallocate computational and physical resources toward entities for which recovery remains possible, rather than pursuing an impossible target.
+
+\subsection{Recoverability erosion}
+\label{sec:recoverability_erosion}
+
+A natural question for online control is how the optimistic recoverability indicators evolve as time advances and scheduling decisions are executed. Intuitively, the consumption of bottleneck capacity by operations that do not contribute to a given entity's recovery should degrade that entity's recoverability. The following theorem formalizes this intuition under mild and practically typical conditions.
+
+\begin{theorem}[Recoverability erosion under non-recovery capacity consumption]\label{thm:erosion}
+Let $t_1<t_2$ be two decision epochs. Assume the following conditions hold for entity $r$:
+\begin{enumerate}
+    \item[(C1)] $Q_r^{rem}(t_2)=Q_r^{rem}(t_1)$ (remaining required quantity is unchanged);
+    \item[(C2)] $\mathcal E_r(t_2)\subseteq\mathcal E_r(t_1)$ (the eligible set does not expand);
+    \item[(C3)] $\underline w_{j,\mathcal B}(t_2)\ge\underline w_{j,\mathcal B}(t_1)$ for all $j\in\mathcal E_r(t_2)$ (the minimum bottleneck workload per job is non-decreasing);
+    \item[(C4)] $\operatorname{Cap}_{\mathcal B}(t_2,d_r)\le\operatorname{Cap}_{\mathcal B}(t_1,d_r)$ (available bottleneck capacity is non-increasing).
+\end{enumerate}
+Then the following monotonicity properties hold:
+\begin{align}
+\overline Q_{r,\mathcal B}^{rec}(t_2)&\le\overline Q_{r,\mathcal B}^{rec}(t_1),\label{eq:erosion_q}\\
+\underline U_{r,\mathcal B}(t_2)&\ge\underline U_{r,\mathcal B}(t_1).\label{eq:erosion_u}
+\end{align}
+\end{theorem}
+
+\begin{pf}
+Let $z^*$ be an optimal solution to the maximum recoverable service quantity problem at time $t_2$, so that $\overline Q_{r,\mathcal B}^{rec}(t_2)=\sum_{j\in\mathcal E_r(t_2)}q_j z_j^*$. By condition (C2), every job selected by $z^*$ also belongs to $\mathcal E_r(t_1)$. Construct a candidate solution $z'$ for time $t_1$ by setting $z'_j=z_j^*$ for $j\in\mathcal E_r(t_2)$ and $z'_j=0$ for $j\in\mathcal E_r(t_1)\setminus\mathcal E_r(t_2)$. Its workload consumption at $t_1$ satisfies
+\begin{align}
+\sum_{j\in\mathcal E_r(t_1)}\underline w_{j,\mathcal B}(t_1)\,z'_j
+&=\sum_{j\in\mathcal E_r(t_2)}\underline w_{j,\mathcal B}(t_1)\,z_j^*\nonumber\\
+&\le\sum_{j\in\mathcal E_r(t_2)}\underline w_{j,\mathcal B}(t_2)\,z_j^* \qquad\text{(by C3)}\nonumber\\
+&\le\operatorname{Cap}_{\mathcal B}(t_2,d_r) \qquad\text{(feasibility of $z^*$ at $t_2$)}\nonumber\\
+&\le\operatorname{Cap}_{\mathcal B}(t_1,d_r) \qquad\text{(by C4)}.\nonumber
+\end{align}
+Thus $z'$ is feasible for the problem at $t_1$, yielding
+\[
+\overline Q_{r,\mathcal B}^{rec}(t_1)\ge\sum_{j\in\mathcal E_r(t_1)}q_j z'_j=\sum_{j\in\mathcal E_r(t_2)}q_j z_j^*=\overline Q_{r,\mathcal B}^{rec}(t_2),
+\]
+which proves \eqref{eq:erosion_q}.
+
+For \eqref{eq:erosion_u}, applying the definition of the lower bound together with condition (C1) and inequality \eqref{eq:erosion_q}:
+\begin{align}
+\underline U_{r,\mathcal B}(t_2)&=\big[Q_r^{rem}(t_2)-\overline Q_{r,\mathcal B}^{rec}(t_2)\big]_+\nonumber\\
+&\ge\big[Q_r^{rem}(t_1)-\overline Q_{r,\mathcal B}^{rec}(t_1)\big]_+=\underline U_{r,\mathcal B}(t_1).\nonumber
+\end{align}
+\end{pf}
+
+Theorem \ref{thm:erosion} captures the fundamental directional pressure in online service-level management: under quiescent conditions (no new job arrivals for entity $r$, no capacity replenishment), the passage of time degrades recoverability. Conditions (C1)--(C4) describe the typical regime between job-release events for a given entity: no additional quantity has been secured, the eligible set shrinks as remaining slack diminishes, residual workloads do not decrease, and bottleneck capacity is progressively consumed. The result underscores the time-critical nature of recovery-oriented intervention: delaying recovery action can only weaken the achievable outcome, never improve it.
+
+It is important to note that Theorem~\ref{thm:erosion} does \emph{not} claim that recoverability always decreases monotonically over time. When new jobs arrive (violating C2) or capacity is freed by completion of non-bottleneck work, recoverability may increase. The conditions (C1)--(C4) delineate precisely when the monotonic decrease is guaranteed.
+
+\subsection{Mandatory rescue structure}
+\label{sec:mandatory_rescue}
+
+When optimistic zero-shortfall recovery is still attainable for entity $r$, the recovery may be \emph{fragile}: certain jobs are indispensable, and their exclusion would render the quantity target infeasible. Identifying these jobs is essential for constructing effective recovery actions.
+
+For a candidate job $j\in\mathcal E_r(t)$, define the \textbf{exclusion-based maximum recoverable quantity}:
+\begin{equation}\label{eq:exclusion_recoverable}
+\overline Q_{r,\mathcal B}^{rec,-j}(t)=
+\max\;\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i\,z_i
+\end{equation}
+subject to
+\begin{equation}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}\underline w_{i,\mathcal B}(t)\,z_i\le\operatorname{Cap}_{\mathcal B}(t,d_r),\qquad z_i\in\{0,1\}.
+\end{equation}
+This is the maximum on-time quantity achievable when job $j$ is excluded from consideration.
+
+\begin{definition}[Mandatory rescue job]\label{def:mandatory}
+A job $j\in\mathcal E_r(t)$ is a \textbf{mandatory rescue job} for entity $r$ at time $t$ if
+\[
+\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)
+\quad\text{but}\quad
+\overline Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t).
+\]
+\end{definition}
+
+In words, optimistic zero-shortfall recovery is feasible when $j$ is available, but becomes infeasible the moment $j$ is excluded. Mandatory rescue jobs are the load-bearing elements of the recovery plan.
+
+\begin{theorem}[Mandatory on-time delivery]\label{thm:mandatory_delivery}
+If $j$ is a mandatory rescue job for entity $r$ at time $t$, then every feasible continuation schedule $\pi$ with $U_r^\pi=0$ must deliver $j$ no later than $d_r$.
+\end{theorem}
+
+\begin{pf}
+Suppose, for contradiction, that there exists a feasible continuation schedule $\pi$ achieving $U_r^\pi=0$ in which job $j$ is delivered after the deadline ($D_j^\pi>d_r$). Let $\mathcal J_{r}^{on}(\pi)\subseteq\mathcal E_r(t)$ be the set of entity-$r$ jobs delivered on time under $\pi$. Since $j$ is late, $\mathcal J_{r}^{on}(\pi)\subseteq\mathcal E_r(t)\setminus\{j\}$.
+
+Because $U_r^\pi=0$, the on-time quantity from these jobs must satisfy the remaining requirement:
+\[
+\sum_{i\in\mathcal J_{r}^{on}(\pi)}q_i\ge Q_r^{rem}(t).
+\]
+
+As in the proof of Theorem~\ref{thm:unavoidable_shortfall}, the capacity feasibility of $\pi$ implies that the indicator vector of $\mathcal J_{r}^{on}(\pi)$ satisfies the capacity constraint of problem \eqref{eq:exclusion_recoverable}. Hence it is a feasible solution to the exclusion-based problem, yielding
+\[
+\overline Q_{r,\mathcal B}^{rec,-j}(t)\ge\sum_{i\in\mathcal J_{r}^{on}(\pi)}q_i\ge Q_r^{rem}(t),
+\]
+which contradicts the definition of a mandatory rescue job ($\overline Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t)$). Therefore, no such continuation $\pi$ can exist: any zero-shortfall schedule must deliver $j$ on time.
+\end{pf}
+
+Theorem \ref{thm:mandatory_delivery} provides a rigorous justification for elevating mandatory rescue jobs to the highest priority in recovery-oriented dispatching. We now develop two practically verifiable sufficient conditions and an exact marginal characterization.
+
+\begin{proposition}[Quantity-mandatory jobs]\label{prop:quantity_mandatory}
+Assume $\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)$. If
+\begin{equation}\label{eq:quantity_mandatory_cond}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i<Q_r^{rem}(t),
+\end{equation}
+then $j$ is a mandatory rescue job.
+\end{proposition}
+
+\begin{pf}
+Condition \eqref{eq:quantity_mandatory_cond} states that the total quantity of all eligible jobs other than $j$ is insufficient to meet the remaining requirement. Since any feasible solution to the exclusion-based problem \eqref{eq:exclusion_recoverable} selects only from $\mathcal E_r(t)\setminus\{j\}$, its objective value cannot exceed the total available quantity:
+\[
+\overline Q_{r,\mathcal B}^{rec,-j}(t)\le\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i<Q_r^{rem}(t).
+\]
+Together with the premise $\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)$, the conditions of Definition~\ref{def:mandatory} are satisfied.
+\end{pf}
+
+Quantity-mandatory jobs are indispensable for a simple reason: even if \emph{all} other eligible jobs were delivered on time (ignoring capacity), the quantity target could not be met. Their mandatory status is driven purely by the quantity balance, independent of the capacity constraint.
+
+\begin{proposition}[Capacity-mandatory jobs]\label{prop:capacity_mandatory}
+Assume $\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)$. If
+\begin{equation}\label{eq:capacity_mandatory_cond}
+\sum_{i\in\mathcal E_r(t)\setminus\{j\}}q_i\ge Q_r^{rem}(t)
+\quad\text{but}\quad
+\overline Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t),
+\end{equation}
+then $j$ is a mandatory rescue job.
+\end{proposition}
+
+\begin{pf}
+The conditions in \eqref{eq:capacity_mandatory_cond} directly match Definition~\ref{def:mandatory} (the first inequality ensures $j$ is not quantity-mandatory, while the second establishes the exclusion-based infeasibility).
+\end{pf}
+
+In contrast to quantity-mandatory jobs, capacity-mandatory jobs are indispensable not because of insufficient aggregate quantity, but because the bottleneck capacity is inadequate to process any alternative combination of jobs that meets the quantity target. Their mandatory status arises from the interaction between the quantity requirement and the capacity constraint.
+
+\begin{proposition}[Marginal-recovery characterization]\label{prop:marginal}
+Define the \textbf{marginal recoverability contribution} of job $j$ and the \textbf{recovery surplus} of entity $r$ as
+\begin{align}
+\Delta_{j,r,\mathcal B}^{rec}(t)&=\overline Q_{r,\mathcal B}^{rec}(t)-\overline Q_{r,\mathcal B}^{rec,-j}(t),\label{eq:marginal_def}\\
+S_{r,\mathcal B}^{rec}(t)&=\overline Q_{r,\mathcal B}^{rec}(t)-Q_r^{rem}(t).\label{eq:surplus_def}
+\end{align}
+Assume $\overline Q_{r,\mathcal B}^{rec}(t)\ge Q_r^{rem}(t)$. Then $j$ is a mandatory rescue job if and only if
+\begin{equation}\label{eq:marginal_condition}
+\Delta_{j,r,\mathcal B}^{rec}(t)>S_{r,\mathcal B}^{rec}(t).
+\end{equation}
+\end{proposition}
+
+\begin{pf}
+By Definition~\ref{def:mandatory}, $j$ is mandatory if and only if $\overline Q_{r,\mathcal B}^{rec,-j}(t)<Q_r^{rem}(t)$. Substituting $\overline Q_{r,\mathcal B}^{rec,-j}(t)=\overline Q_{r,\mathcal B}^{rec}(t)-\Delta_{j,r,\mathcal B}^{rec}(t)$ from \eqref{eq:marginal_def}, this inequality becomes
+\[
+\overline Q_{r,\mathcal B}^{rec}(t)-\Delta_{j,r,\mathcal B}^{rec}(t)<Q_r^{rem}(t)
+\iff\Delta_{j,r,\mathcal B}^{rec}(t)>\overline Q_{r,\mathcal B}^{rec}(t)-Q_r^{rem}(t)=S_{r,\mathcal B}^{rec}(t),
+\]
+where the last equality uses \eqref{eq:surplus_def}.
+\end{pf}
+
+Proposition~\ref{prop:marginal} provides an intuitive and computationally useful characterization: a job is mandatory precisely when its removal would eliminate more recoverable quantity than the current surplus above the requirement. When the recovery margin $S_{r,\mathcal B}^{rec}(t)$ is thin, even jobs with modest marginal contributions become mandatory. Conversely, when the surplus is large, the system can afford to lose individual jobs without compromising recoverability.
+
+\medskip\noindent\textbf{Implications for algorithm design.}
+The structural results established in this section collectively motivate the core mechanisms of the proposed Recoverability-Guided Rolling-Horizon Optimization with Large Neighborhood Search (RG-RHO-LNS) algorithm:
+
+\begin{enumerate}
+    \item The NP-completeness of zero-shortfall fulfillment (Theorem~\ref{thm:np_complete}) justifies the use of metaheuristic search rather than exact optimization for each rolling-horizon subproblem.
+    \item The dual knapsack characterizations (Theorem~\ref{thm:dual_knapsack}) enable efficient online recoverability diagnosis: both $W_{r,\mathcal B}^{min}(t)$ and $\overline Q_{r,\mathcal B}^{rec}(t)$ are computable in pseudo-polynomial time via standard dynamic programming for 0-1 knapsack, supporting real-time entity-level assessment at every rescheduling epoch.
+    \item The unavoidable shortfall lower bound (Theorem~\ref{thm:unavoidable_shortfall}) and its corollary identify entities for which zero shortfall is provably unattainable, enabling the algorithm to classify entities and direct computational effort toward those where recovery remains possible.
+    \item The recoverability erosion theorem (Theorem~\ref{thm:erosion}) highlights the time-critical nature of recovery actions, motivating early and aggressive intervention for entities approaching the unattainability threshold.
+    \item The mandatory rescue structure (Theorem~\ref{thm:mandatory_delivery}, Propositions~\ref{prop:quantity_mandatory}--\ref{prop:marginal}) directly informs the construction of the \emph{recoverability-guided active set}: mandatory rescue jobs are included and prioritized in the repair neighborhood. Entity classification based on the recovery surplus $S_{r,\mathcal B}^{rec}(t)$---distinguishing secured, stably-recoverable, fragile-recoverable, and partially-unrecoverable entities---determines the composition of recovery-oriented neighborhoods that target specific bottleneck resources.
+\end{enumerate}
+
+Together, these theoretical elements form the recoverability-guidance module of RG-RHO-LNS, establishing a principled bridge between the structural properties of SL-ISP and its online heuristic solution.

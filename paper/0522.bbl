@@ -1,0 +1,133 @@
+\begin{thebibliography}{11}
+\expandafter\ifx\csname natexlab\endcsname\relax\def\natexlab#1{#1}\fi
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\href}[2]{#2}
+\providecommand{\path}[1]{#1}
+\providecommand{\DOIprefix}{doi:}
+\providecommand{\ArXivprefix}{arXiv:}
+\providecommand{\URLprefix}{URL: }
+\providecommand{\Pubmedprefix}{pmid:}
+\providecommand{\doi}[1]{\href{http://dx.doi.org/#1}{\path{#1}}}
+\providecommand{\Pubmed}[1]{\href{pmid:#1}{\path{#1}}}
+\providecommand{\bibinfo}[2]{#2}
+\ifx\xfnm\relax \def\xfnm[#1]{\unskip,\space#1}\fi
+%Type = Article
+\bibitem[{Arora and Agarwal(2016)}]{arora2016meta}
+\bibinfo{author}{Arora, D.}, \bibinfo{author}{Agarwal, G.},
+  \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{Meta-heuristic approaches for flowshop scheduling
+  problems: a review}.
+\newblock \bibinfo{journal}{International Journal of Advanced Operations
+  Management} \bibinfo{volume}{8}, \bibinfo{pages}{1--16}.
+%Type = Incollection
+\bibitem[{Burke and Landa~Silva(2005)}]{burke2005design}
+\bibinfo{author}{Burke, E.K.}, \bibinfo{author}{Landa~Silva, J.},
+  \bibinfo{year}{2005}.
+\newblock \bibinfo{title}{The design of memetic algorithms for scheduling and
+  timetabling problems}, in: \bibinfo{booktitle}{Recent advances in memetic
+  algorithms}. \bibinfo{publisher}{Springer}, pp. \bibinfo{pages}{289--311}.
+%Type = Article
+\bibitem[{Hou et~al.(2022)Hou, Fu, Gao, Zhang and
+  Sadollah}]{hou_modelling_2022}
+\bibinfo{author}{Hou, Y.}, \bibinfo{author}{Fu, Y.}, \bibinfo{author}{Gao, K.},
+  \bibinfo{author}{Zhang, H.}, \bibinfo{author}{Sadollah, A.},
+  \bibinfo{year}{2022}.
+\newblock \bibinfo{title}{Modelling and optimization of integrated distributed
+  flow shop scheduling and distribution problems with time windows}.
+\newblock \bibinfo{journal}{Expert Systems with Applications}
+  \bibinfo{volume}{187}, \bibinfo{pages}{115827}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S0957417421011921},
+  \DOIprefix\doi{10.1016/j.eswa.2021.115827}.
+%Type = Article
+\bibitem[{Hou et~al.(2023)Hou, Guo, Han and Wang}]{hou_knowledge-driven_2023}
+\bibinfo{author}{Hou, Y.}, \bibinfo{author}{Guo, X.}, \bibinfo{author}{Han,
+  H.}, \bibinfo{author}{Wang, J.}, \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{Knowledge-driven ant colony optimization algorithm
+  for vehicle routing problem in instant delivery peak period}.
+\newblock \bibinfo{journal}{Applied Soft Computing} \bibinfo{volume}{145},
+  \bibinfo{pages}{110551}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S1568494623005690},
+  \DOIprefix\doi{10.1016/j.asoc.2023.110551}.
+%Type = Article
+\bibitem[{Huang et~al.(2024)Huang, Gao and Li}]{huang2024hierarchical}
+\bibinfo{author}{Huang, J.P.}, \bibinfo{author}{Gao, L.}, \bibinfo{author}{Li,
+  X.Y.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{A hierarchical multi-action deep reinforcement
+  learning method for dynamic distributed job-shop scheduling problem with job
+  arrivals}.
+\newblock \bibinfo{journal}{IEEE Transactions on Automation Science and
+  Engineering} \bibinfo{volume}{22}, \bibinfo{pages}{2501--2513}.
+%Type = Article
+\bibitem[{Jia et~al.(2025)Jia, Wang and
+  Zhang}]{jia_learning-and-knowledge-assisted_2025}
+\bibinfo{author}{Jia, Y.}, \bibinfo{author}{Wang, W.}, \bibinfo{author}{Zhang,
+  J.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{A learning-and-knowledge-assisted multi-population
+  collaborative evolutionary algorithm for integrated
+  design-production-distribution scheduling problems in mass personalized
+  customization}.
+\newblock \bibinfo{journal}{Swarm and Evolutionary Computation}
+  \bibinfo{volume}{99}, \bibinfo{pages}{102158}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S2210650225003153},
+  \DOIprefix\doi{10.1016/j.swevo.2025.102158}.
+%Type = Article
+\bibitem[{Liu et~al.(2023)Liu, Tseng, Huang and Wang}]{liu2023dynamic}
+\bibinfo{author}{Liu, C.L.}, \bibinfo{author}{Tseng, C.J.},
+  \bibinfo{author}{Huang, T.H.}, \bibinfo{author}{Wang, J.W.},
+  \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{Dynamic parallel machine scheduling with deep
+  q-network}.
+\newblock \bibinfo{journal}{IEEE Transactions on Systems, Man, and Cybernetics:
+  Systems} \bibinfo{volume}{53}, \bibinfo{pages}{6792--6804}.
+%Type = Article
+\bibitem[{Sawik(2016)}]{sawik_integrated_2016}
+\bibinfo{author}{Sawik, T.}, \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{Integrated supply, production and distribution
+  scheduling under disruption risks}.
+\newblock \bibinfo{journal}{Omega} \bibinfo{volume}{62},
+  \bibinfo{pages}{131--144}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S030504831500198X},
+  \DOIprefix\doi{10.1016/j.omega.2015.09.005}.
+%Type = Article
+\bibitem[{Yuan et~al.(2024)Yuan, Wang, Cheng, Song, Fan and
+  Li}]{yuan_solving_2024}
+\bibinfo{author}{Yuan, E.}, \bibinfo{author}{Wang, L.}, \bibinfo{author}{Cheng,
+  S.}, \bibinfo{author}{Song, S.}, \bibinfo{author}{Fan, W.},
+  \bibinfo{author}{Li, Y.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{Solving flexible job shop scheduling problems via
+  deep reinforcement learning}.
+\newblock \bibinfo{journal}{Expert Systems with Applications}
+  \bibinfo{volume}{245}, \bibinfo{pages}{123019}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S0957417423035212},
+  \DOIprefix\doi{10.1016/j.eswa.2023.123019}.
+%Type = Article
+\bibitem[{Zhang et~al.(2024)Zhang, Fu, Gao, Zhang and
+  Wang}]{zhang_cooperative_2024}
+\bibinfo{author}{Zhang, Z.}, \bibinfo{author}{Fu, Y.}, \bibinfo{author}{Gao,
+  K.}, \bibinfo{author}{Zhang, H.}, \bibinfo{author}{Wang, L.},
+  \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{A cooperative evolutionary algorithm with simulated
+  annealing for integrated scheduling of distributed flexible job shops and
+  distribution}.
+\newblock \bibinfo{journal}{Swarm and Evolutionary Computation}
+  \bibinfo{volume}{85}, \bibinfo{pages}{101467}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S2210650223002390},
+  \DOIprefix\doi{10.1016/j.swevo.2023.101467}.
+%Type = Article
+\bibitem[{Zhao and Zhou(2025)}]{zhao_learning-driven_2025}
+\bibinfo{author}{Zhao, S.}, \bibinfo{author}{Zhou, H.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Learning-driven memetic algorithm for solving
+  integrated distributed production and transportation scheduling problem}.
+\newblock \bibinfo{journal}{Swarm and Evolutionary Computation}
+  \bibinfo{volume}{96}, \bibinfo{pages}{101945}.
+\newblock \URLprefix
+  \url{https://linkinghub.elsevier.com/retrieve/pii/S2210650225001038},
+  \DOIprefix\doi{10.1016/j.swevo.2025.101945}.
+
+\end{thebibliography}
