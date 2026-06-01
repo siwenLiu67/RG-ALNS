@@ -44,3 +44,4 @@ _git_setup.py
 .claude/todos/
 .claude/*.jsonl
 .claude/settings.local.json
+t_push_api.py
