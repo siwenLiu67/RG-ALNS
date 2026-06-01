@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(tasklist)",
+      "Bash(findstr python *)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/ -v --tb=short -k \"not \\(safe_mode or committed_source or strict_no_worse\\)\")",
+      "Bash(python -m pytest tests/ -m \"not slow\" --tb=short -q)"
+    ]
+  }
+}

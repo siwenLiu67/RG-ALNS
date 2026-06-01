@@ -1,0 +1,52 @@
+# RG-ALNS budget-gated variant vs EDD vs VNS-Fast
+# 1 pressure x 1 size combo x 3 algorithms x 1 seed = 3 runs
+
+pilot:
+  name: "RG-ALNS 40J Budget-Gated EDD VNS Comparison"
+  seed: 42
+  experiment_mode: "normal"
+  num_seeds: 1
+
+instances:
+  medium:
+    label: "Medium Pressure"
+    rho_range: [0.75, 0.85]
+    deadline_tightness: 1.0
+    effective_due_spread: 0.50
+    weight_pattern: "mild"
+    arrival_intensity: "medium"
+    num_entities: 3
+    ops_per_job: [2, 4]
+    proc_time_range: [10, 50]
+    transport_delay_range: [10, 40]
+    eligible_machines_range: [2, 3]
+    alpha: 1.0
+    beta: 1.0
+    combinations:
+      - {num_jobs: 40, num_machines: 5, num_entities: 3}
+
+algorithms:
+  edd:
+    type: "dispatching"
+    label: "EDD"
+
+  vns_fast:
+    type: "vns_fast"
+    label: "VNS-Fast"
+    horizon: 300
+    max_iter: 20
+
+  rg_alns:
+    type: "rg_alns"
+    label: "RG-ALNS"
+    horizon: 300
+    lns_iterations: 20
+    exact_local_job_limit: 8
+    exact_local_time_limit_s: 0.2
+    dispatch_mode: standard_projected
+
+output:
+  raw_csv: "outputs/rg_alns_40j_edd_vns_budget_20260601/final_raw.csv"
+  convergence_raw: "outputs/rg_alns_40j_edd_vns_budget_20260601/convergence_raw.csv"
+  initial_candidate_performance: "outputs/rg_alns_40j_edd_vns_budget_20260601/initial_candidate_performance.csv"
+  rollout_portfolio_raw: "outputs/rg_alns_40j_edd_vns_budget_20260601/rollout_portfolio_raw.csv"
