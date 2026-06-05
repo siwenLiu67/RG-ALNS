@@ -26,7 +26,11 @@ from ..recoverability.knapsack_recovery import (
     maximum_recoverable_service_quantity,
 )
 from ..recoverability.mandatory_jobs import mandatory_rescue_jobs
-from ..recoverability.shortfall_bounds import unavoidable_shortfall_lower_bound
+from ..recoverability.shortfall_bounds import (
+    current_information_shortfall_risk,
+    known_future_quantity,
+    unavoidable_shortfall_lower_bound,
+)
 from ..utils.random_seed import create_rng
 
 EPS = 1e-9
@@ -393,6 +397,7 @@ def _fast_eval_components(
                 delivery = c + entity.transport_delay
                 if delivery <= entity.deadline:
                     on_time_qty += job.quantity
+        on_time_qty += known_future_quantity(entity.entity_id, instance)
         shortfall = max(0, entity.min_fulfillment - on_time_qty)
         wsf += entity.weight * shortfall
 
@@ -556,36 +561,53 @@ def _classify_entities_and_intensity(
             continue
 
         q_rec, _ = maximum_recoverable_service_quantity(eid, pool_B, state, instance, method="dp")
-        u_lb = unavoidable_shortfall_lower_bound(eid, pool_B, state, instance, method="dp")
-        s_rec = q_rec - q_rem  # recovery surplus
+        q_future = known_future_quantity(eid, instance)
+        q_available = q_rec + q_future
+        u_lb = current_information_shortfall_risk(
+            eid, pool_B, state, instance, method="dp"
+        )
+        s_rec = q_available - q_rem  # recovery surplus including hidden aggregate quantity
 
-        if u_lb > 0 or q_rec < q_rem:
+        if u_lb > 0 or q_available < q_rem:
             # Partially unrecoverable: recovery is structurally impossible
             # Low RG intensity — don't over-invest in impossible recovery
             classifications.append({
                 "entity_id": eid, "class": "partially_unrecoverable",
-                "q_rem": q_rem, "q_rec": q_rec, "u_lb": u_lb, "s_rec": s_rec,
+                "q_rem": q_rem, "q_rec": q_rec, "q_future": q_future,
+                "u_lb": u_lb, "s_rec": s_rec,
             })
             intensities.append(0.2)
-        elif q_rec >= q_rem * 1.5 and s_rec > q_rem * 0.3:
+        elif q_rec < q_rem and q_future > 0:
+            # The current visible pool is insufficient, but known future
+            # aggregate quantity can still satisfy the remaining commitment.
+            classifications.append({
+                "entity_id": eid, "class": "arrival_dependent_recoverable",
+                "q_rem": q_rem, "q_rec": q_rec, "q_future": q_future,
+                "u_lb": u_lb, "s_rec": s_rec,
+            })
+            intensities.append(0.4)
+        elif q_available >= q_rem * 1.5 and s_rec > q_rem * 0.3:
             # Stable-recoverable: large surplus, recovery is easy
             classifications.append({
                 "entity_id": eid, "class": "stable_recoverable",
-                "q_rem": q_rem, "q_rec": q_rec, "u_lb": u_lb, "s_rec": s_rec,
+                "q_rem": q_rem, "q_rec": q_rec, "q_future": q_future,
+                "u_lb": u_lb, "s_rec": s_rec,
             })
             intensities.append(0.2)
         elif s_rec > 0:
             # Fragile-recoverable: small surplus, RG guidance is most valuable here
             classifications.append({
                 "entity_id": eid, "class": "fragile_recoverable",
-                "q_rem": q_rem, "q_rec": q_rec, "u_lb": u_lb, "s_rec": s_rec,
+                "q_rem": q_rem, "q_rec": q_rec, "q_future": q_future,
+                "u_lb": u_lb, "s_rec": s_rec,
             })
             intensities.append(0.6)
         else:
             # Secured: no remaining quantity needed
             classifications.append({
                 "entity_id": eid, "class": "secured",
-                "q_rem": q_rem, "q_rec": q_rec, "u_lb": u_lb, "s_rec": s_rec,
+                "q_rem": q_rem, "q_rec": q_rec, "q_future": q_future,
+                "u_lb": u_lb, "s_rec": s_rec,
             })
             intensities.append(0.0)
 
@@ -624,8 +646,9 @@ def _compute_rg_scores(
         entity_quota_pressure[eid] = _entity_quota_pressure(instance, state, eid)
         entity_cover[eid] = _minimum_work_service_cover(instance, state, eid)
         if q_rem > 0:
-            q_rec, _ = maximum_recoverable_service_quantity(eid, pool_B, state, instance, method="dp")
-            entity_shortfall[eid] = max(0, q_rem - q_rec)
+            entity_shortfall[eid] = current_information_shortfall_risk(
+                eid, pool_B, state, instance, method="dp"
+            )
         else:
             entity_shortfall[eid] = 0
 
@@ -2024,11 +2047,10 @@ def _destroy_entity_jobs(
     sched: FastSchedule, instance: SLISPInstance, state: ScheduleState, k: int,
 ) -> list[int]:
     """Destroy k jobs belonging to entities with the highest service shortfall."""
-    from ..recoverability.shortfall_bounds import unavoidable_shortfall_lower_bound
     machine_pool = {m.machine_id for m in instance.machines}
     entity_risk = {}
     for entity in instance.entities:
-        sf = unavoidable_shortfall_lower_bound(
+        sf = current_information_shortfall_risk(
             entity.entity_id, machine_pool, state, instance, method="dp"
         )
         entity_risk[entity.entity_id] = sf * entity.weight

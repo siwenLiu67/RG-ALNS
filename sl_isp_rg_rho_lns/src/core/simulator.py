@@ -4,13 +4,15 @@ from collections.abc import Callable
 
 from .dataclasses import Job, Operation, ScheduledOperation, SLISPInstance
 from .event_queue import Event, EventQueue, EventType
+from .online import OnlineProblemView
 from .objective import ObjectiveResult, compute_objective
 from .schedule_state import ScheduleState
 
 # Scheduling algorithm signature:
 #   (instance, state) -> list of (job_id, op_id, machine_id, start_time)
+SchedulingProblem = SLISPInstance | OnlineProblemView
 SchedulingAlgorithm = Callable[
-    [SLISPInstance, ScheduleState], list[tuple[int, int, int, int]]
+    [SchedulingProblem, ScheduleState], list[tuple[int, int, int, int]]
 ]
 
 
@@ -88,10 +90,15 @@ def _edf_dispatching_rule(
 def run_simulation(
     instance: SLISPInstance,
     algorithm: SchedulingAlgorithm | None = None,
+    *,
+    online_visibility: bool = False,
 ) -> tuple[ScheduleState, ObjectiveResult]:
     """Run the event-driven scheduling simulation on the given instance.
 
     If no algorithm is provided, the built-in EDF dispatching rule is used.
+    If online_visibility is true, the algorithm receives only released jobs;
+    the full instance remains hidden inside the simulator for event generation
+    and final objective evaluation.
 
     Returns the final ScheduleState and the computed ObjectiveResult.
     """
@@ -116,10 +123,56 @@ def run_simulation(
 
     # Track which jobs have been released (arrived)
     arrived_jobs: set[int] = set()
+    visible_job_ids: set[int] = set()
+    entity_future_quantity: dict[int, int] = {
+        entity.entity_id: int(entity.total_quantity)
+        for entity in instance.entities
+    }
+
+    def algorithm_problem_view() -> SchedulingProblem:
+        if not online_visibility:
+            return instance
+        visible_jobs = [
+            job for job in instance.jobs
+            if job.job_id in visible_job_ids
+        ]
+        return OnlineProblemView(
+            jobs=visible_jobs,
+            entities=instance.entities,
+            machines=instance.machines,
+            alpha=instance.alpha,
+            beta=instance.beta,
+            entity_future_quantity=entity_future_quantity,
+            metadata={
+                **instance.metadata,
+                "online_visibility": True,
+                "visible_job_ids": sorted(visible_job_ids),
+            },
+        )
+
+    def algorithm_state_view() -> ScheduleState:
+        if not online_visibility:
+            return state
+        return ScheduleState(
+            current_time=state.current_time,
+            machine_available_times=dict(state.machine_available_times),
+            completed_operations=set(state.completed_operations),
+            ongoing_operations=dict(state.ongoing_operations),
+            scheduled_operations=list(state.scheduled_operations),
+            completed_jobs=dict(state.completed_jobs),
+            delivered_on_time_jobs=set(state.delivered_on_time_jobs),
+            event_queue=EventQueue(),
+            last_completed_op_index=dict(state.last_completed_op_index),
+        )
 
     def process_event(event: Event) -> None:
         if event.event_type == EventType.JOB_ARRIVAL:
             arrived_jobs.add(event.job_id)
+            if online_visibility and event.job_id not in visible_job_ids:
+                job = instance.get_job(event.job_id)
+                visible_job_ids.add(event.job_id)
+                remaining = entity_future_quantity.get(job.entity_id, 0) - job.quantity
+                entity_future_quantity[job.entity_id] = max(0, remaining)
 
         elif event.event_type == EventType.OP_COMPLETION:
             job = instance.get_job(event.job_id)
@@ -149,7 +202,7 @@ def run_simulation(
             process_event(state.event_queue.pop())
 
         # After processing all events at this timestamp, run the scheduling algorithm
-        _dispatch_cycle(instance, state, algorithm)
+        _dispatch_cycle(instance, state, algorithm, algorithm_problem_view, algorithm_state_view)
 
     # After all events processed, compute the objective
     result = compute_objective(instance, state)
@@ -214,6 +267,8 @@ def _dispatch_cycle(
     instance: SLISPInstance,
     state: ScheduleState,
     algorithm: SchedulingAlgorithm,
+    problem_factory: Callable[[], SchedulingProblem] | None = None,
+    state_factory: Callable[[], ScheduleState] | None = None,
 ) -> None:
     """Run scheduling algorithm and post OP_COMPLETION events for new assignments.
 
@@ -223,7 +278,9 @@ def _dispatch_cycle(
     MAX_ITERATIONS = 10_000  # safety bound
 
     for _ in range(MAX_ITERATIONS):
-        decisions = algorithm(instance, state)
+        problem = problem_factory() if problem_factory is not None else instance
+        algorithm_state = state_factory() if state_factory is not None else state
+        decisions = algorithm(problem, algorithm_state)
         if not decisions:
             break
 

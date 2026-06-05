@@ -1,4 +1,4 @@
-"""Unavoidable shortfall lower bound computation.
+"""Shortfall risk computations.
 
 U̲_{r,B}(t) = max(0, Q_rem_r(t) − Q̅_rec_{r,B}(t))
 
@@ -31,3 +31,33 @@ def unavoidable_shortfall_lower_bound(
         entity_id, pool_B, state, instance, method=method
     )
     return max(0, q_rem - q_rec_bar)
+
+
+def known_future_quantity(entity_id: int, instance: SLISPInstance) -> int:
+    """Return known not-yet-arrived aggregate quantity for an online view."""
+    future_quantity = getattr(instance, "entity_future_quantity", {})
+    return max(0, int(future_quantity.get(entity_id, 0)))
+
+
+def current_information_shortfall_risk(
+    entity_id: int,
+    pool_B: set[int],
+    state: ScheduleState,
+    instance: SLISPInstance,
+    method: str = "dp",
+) -> int:
+    """Compute visible service risk after accounting for known future quantity.
+
+    For a full-information instance, this is identical to the unavoidable
+    shortfall lower bound. For an online view, visible recoverable quantity is
+    augmented by the entity's known not-yet-arrived aggregate quantity, whose
+    detailed job data and release times remain hidden from the algorithm.
+    """
+    q_rem = remaining_service_quantity(entity_id, state, instance)
+    if q_rem <= 0:
+        return 0
+
+    q_rec_bar, _ = maximum_recoverable_service_quantity(
+        entity_id, pool_B, state, instance, method=method
+    )
+    return max(0, q_rem - q_rec_bar - known_future_quantity(entity_id, instance))
