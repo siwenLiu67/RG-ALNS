@@ -46,6 +46,10 @@ from src.algorithms.rg_rho_lns_fast import (
     run_nr_rg_rho_lns,
     run_nr_rg_rho_lns_small_oracle,
 )
+from src.algorithms.rg_ralns import (
+    run_lightweight_rg_dispatch,
+    run_rg_ralns,
+)
 from src.algorithms.baselines_fast import (
     spt_rule,
     wspt_rule,
@@ -99,6 +103,29 @@ def _nr_rg_rho_lns_kwargs(
 ) -> dict:
     """Backward-compatible alias for legacy NR-RG-RHO-LNS config entries."""
     return _rg_alns_kwargs(algo_cfg, seed, default_lns_iterations)
+
+
+def _rg_ralns_kwargs(algo_cfg: dict, seed: int) -> dict:
+    """Map Paper A RG-RALNS config fields to constructor kwargs."""
+
+    return {
+        "H_A": algo_cfg.get("H_A", algo_cfg.get("h_a", 12)),
+        "N_A": algo_cfg.get("N_A", algo_cfg.get("n_a", 30)),
+        "alpha": algo_cfg.get("alpha", None),
+        "beta": algo_cfg.get("beta", None),
+        "regret_k": algo_cfg.get("regret_k", 2),
+        "eps": algo_cfg.get("eps", 1e-9),
+        "random_seed": algo_cfg.get("random_seed", seed),
+        "destroy_fraction": algo_cfg.get("destroy_fraction", 0.35),
+    }
+
+
+def _uses_online_visibility(algo_cfg: dict) -> bool:
+    """RG-RALNS algorithms must run through OnlineProblemView by default."""
+
+    algo_type = algo_cfg.get("type")
+    default_online = algo_type in {"rg_ralns", "lightweight_rg_dispatch"}
+    return bool(algo_cfg.get("online_visibility", default_online))
 
 
 def _create_algorithm(algo_key: str, algo_cfg: dict, seed: int = 42):
@@ -192,6 +219,18 @@ def _create_algorithm(algo_key: str, algo_cfg: dict, seed: int = 42):
         )
         return (algo, label)
 
+    elif algo_type == "rg_ralns":
+        algo = run_rg_ralns(
+            **_rg_ralns_kwargs(algo_cfg, seed),
+        )
+        return (algo, label)
+
+    elif algo_type == "lightweight_rg_dispatch":
+        algo = run_lightweight_rg_dispatch(
+            **_rg_ralns_kwargs(algo_cfg, seed),
+        )
+        return (algo, label)
+
     # ── Metaheuristic baselines ────────────────────────────────────────────
     elif algo_type == "ils_fast":
         return (run_ils_fast(
@@ -261,7 +300,24 @@ _ALGO_TYPES_ITERATIVE = {
     "ils_fast", "vns_fast", "ts_fast", "sa_fast", "ga_fast",
     "rg_alns", "rg_alns_small_oracle",
     "nr_rg_rho_lns", "nr_rg_rho_lns_small_oracle",
+    "rg_ralns", "lightweight_rg_dispatch",
 }
+
+
+def _append_rg_ralns_stats(row: dict, algo_callable) -> None:
+    """Add RG-RALNS event/local-search diagnostics when available."""
+
+    inner = getattr(algo_callable, "_inner", algo_callable)
+    if not hasattr(inner, "trigger_count"):
+        return
+    row.update({
+        "trigger_count": inner.trigger_count,
+        "trigger_reason_counts": dict(inner.trigger_reason_counts),
+        "avg_A_size": round(inner.avg_A_size, 4),
+        "max_A_size": inner.max_A_size,
+        "alns_runtime_total": round(inner.alns_runtime_total, 6),
+        "dispatch_fallback_count": inner.dispatch_fallback_count,
+    })
 
 
 def _run_single_simulation(instance, algo_key: str, algo_cfg: dict, run_seed: int
@@ -272,7 +328,11 @@ def _run_single_simulation(instance, algo_key: str, algo_cfg: dict, run_seed: in
     t_start = time.perf_counter()
     try:
         algo_callable, algo_label = _create_algorithm(algo_key, algo_cfg, seed=run_seed)
-        final_state, obj_result = run_simulation(instance, algo_callable)
+        final_state, obj_result = run_simulation(
+            instance,
+            algo_callable,
+            online_visibility=_uses_online_visibility(algo_cfg),
+        )
         runtime_s = time.perf_counter() - t_start
         row = {
             "algorithm": algo_key, "algorithm_label": algo_label,
@@ -282,6 +342,7 @@ def _run_single_simulation(instance, algo_key: str, algo_cfg: dict, run_seed: in
             "ZSR": obj_result.zero_shortfall_entity_rate,
             "runtime_total_s": round(runtime_s, 4),
         }
+        _append_rg_ralns_stats(row, algo_callable)
         # Collect convergence logs if available
         inner = getattr(algo_callable, '_inner', algo_callable)
         if hasattr(inner, '_convergence_log'):
@@ -638,9 +699,13 @@ def run_pilot(config_path: str | Path) -> dict:
         t_start = time.perf_counter()
         try:
             algo_callable, algo_label = _create_algorithm(algo_key, algo_cfg, seed=run_seed)
-            final_state, obj_result = run_simulation(instance, algo_callable)
+            final_state, obj_result = run_simulation(
+                instance,
+                algo_callable,
+                online_visibility=_uses_online_visibility(algo_cfg),
+            )
             runtime_s = time.perf_counter() - t_start
-            raw_rows.append({
+            row = {
                 "pressure_level": p_key, "pressure_label": p_label,
                 "instance_index": i_idx, "seed_index": s_idx,
                 "algorithm": algo_key, "algorithm_label": algo_label,
@@ -653,7 +718,9 @@ def run_pilot(config_path: str | Path) -> dict:
                 "mandatory_jobs_identified_total": 0,
                 "mandatory_jobs_on_time_total": 0,
                 "shortfall_lower_bound_final_sum": 0,
-            })
+            }
+            _append_rg_ralns_stats(row, algo_callable)
+            raw_rows.append(row)
         except Exception as exc:
             row = _failed_result_row(
                 algo_key,
