@@ -277,6 +277,24 @@ Z = alpha * TT + beta * WSF
 
 `WSF` denotes weighted service shortfall and is minimized.
 
+### Local Proxy Evaluation versus Final Global Evaluation
+
+Because RG-RALNS is an online local rescheduling algorithm, the candidate evaluation inside local ALNS is not the final global objective over all jobs in the experimental instance. At event time `t`, future unreleased jobs are not visible and jobs outside `A(t)` are frozen for the current local search. Therefore, local ALNS compares candidates using a current-information local proxy:
+
+```text
+Z_loc,t(S') = alpha * TT_loc,t(S') + beta * WSF_loc,t(S')
+```
+
+where `TT_loc,t` and `WSF_loc,t` are computed from the fixed completed-job context, the currently visible information, and the candidate local schedule over `A(t)`. Future unreleased jobs do not enter `Z_loc,t` through concrete release times, processing times, routes, or machine eligibility. They can only affect the recoverability diagnosis through the aggregate quantity buffer `Q_future,r(t)`.
+
+The final reported benchmark objective remains the global objective:
+
+```text
+Z_global = alpha * TT_global + beta * WSF_global
+```
+
+computed after the simulation finishes and all jobs have arrived and completed. Thus, local ALNS uses `Z_loc,t` only to compare alternative local rescheduling decisions under the current online information view; it does not claim to optimize the full future schedule at each event time.
+
 The recoverability diagnostics are not converted into a multi-parameter penalty objective. They guide trigger, affected-set construction, neighborhoods, and acceptance.
 
 ### Hierarchical Acceptance
