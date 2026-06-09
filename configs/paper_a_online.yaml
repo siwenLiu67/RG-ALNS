@@ -1,0 +1,48 @@
+experiment_protocol: paper_a_online
+online_visibility: true
+current_time_commit_only: true
+hide_future_job_details: true
+
+instances:
+  smoke_dynamic_20:
+    num_instances: 1
+    num_jobs: 20
+    num_machines: 5
+    num_entities: 3
+    ops_per_job: [2, 4]
+    rho_range: [0.65, 0.80]
+    deadline_tightness: 1.25
+    effective_due_spread: 0.30
+    weight_pattern: mild
+    quantity_range: [1, 5]
+    proc_time_range: [2, 20]
+    transport_delay_range: [0, 8]
+    eligible_machines_range: [1, 3]
+    arrival_intensity: medium
+    alpha: 1.0
+    beta: 1.0
+
+algorithms:
+  main_online:
+    - edd
+    - spt
+    - wspt
+    - atc
+    - swd
+    - sfg
+    - lightweight_rg_dispatch
+    - online_legacy_rg_alns
+    - rg_ralns
+  offline_oracle:
+    - offline_legacy_rg_alns
+
+rg_ralns:
+  H_A: 8
+  N_A: 8
+  regret_k: 2
+  eps: 1.0e-9
+  destroy_fraction: 0.35
+
+legacy_rg_alns:
+  horizon: 120
+  lns_iterations: 5
