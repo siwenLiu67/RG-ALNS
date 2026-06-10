@@ -4,7 +4,7 @@ Date: 2026-06-11
 
 Branch: `codex/normalized-objective-sensitivity`
 
-Commit: pending before final commit
+Implementation commit: `0488dc8`
 
 ## 1. Background
 
