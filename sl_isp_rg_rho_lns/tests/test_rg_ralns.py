@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from src.algorithms.rg_ralns import (
+    CandidateEvaluation,
     RGRALNS,
     RGRALNSConfig,
     compute_recoverability_diagnostics,
     collect_ready_operations,
     construct_affected_set,
     lightweight_rg_dispatch,
+    _accept_candidate,
+    _repair_service_safe_edd_spt,
     _should_trigger_due_to_bottleneck_competition,
     _should_trigger_due_to_cover_violation,
     _should_trigger_due_to_high_risk_arrival,
@@ -78,6 +81,62 @@ def _online_view(
         entity_future_quantity=future or {},
         metadata={"online_visibility": True},
     )
+
+
+def test_rg_ralns_tuning_parameters_default_to_service_safe_strict_modes():
+    config = RGRALNSConfig()
+
+    assert config.acceptance_mode == "service_safe_z"
+    assert config.bottleneck_trigger_mode == "strict"
+
+
+def test_service_safe_acceptance_prioritizes_z_when_wsf_is_zero():
+    incumbent = CandidateEvaluation(
+        z=100.0,
+        tt=100.0,
+        wsf=0.0,
+        risk_by_entity={0: 0.0},
+        instability=0.0,
+    )
+    lower_z = CandidateEvaluation(
+        z=95.0,
+        tt=95.0,
+        wsf=0.0,
+        risk_by_entity={0: 0.0},
+        instability=5.0,
+    )
+    higher_wsf = CandidateEvaluation(
+        z=80.0,
+        tt=79.0,
+        wsf=1.0,
+        risk_by_entity={0: 0.0},
+        instability=0.0,
+    )
+
+    assert _accept_candidate(lower_z, incumbent, 1e-9, "service_safe_z")
+    assert not _accept_candidate(higher_wsf, incumbent, 1e-9, "service_safe_z")
+
+
+def test_service_safe_repair_keeps_cover_then_orders_remaining_by_edd_spt():
+    entity = ServiceEntity(0, deadline=40, rho=0.5, weight=1.0, total_quantity=4, transport_delay=0)
+    early_short = _job(0, 0, 0, 1, (0, 2))
+    late_long = _job(1, 0, 0, 1, (0, 9))
+    cover = _job(2, 0, 0, 1, (0, 5))
+    view = _online_view([late_long, early_short, cover], [entity], [Machine(0)], future={0: 0})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    diagnostics.cover_jobs = {2}
+    diagnostics.by_entity[0].cover_jobs = [2]
+
+    order = _repair_service_safe_edd_spt(
+        kept=[1],
+        removed=[2, 0],
+        problem=view,
+        state=state,
+        diagnostics=diagnostics,
+    )
+
+    assert order == [2, 0, 1]
 
 
 def test_future_job_details_are_not_available_to_diagnostics():
@@ -182,13 +241,37 @@ def test_trigger_conditions_are_deterministic_and_independent():
     assert _should_trigger_due_to_cover_violation(cover_view, state, cover_diag, cover_ready)
 
     low_entity = ServiceEntity(1, deadline=30, rho=0.5, weight=1.0, total_quantity=2, transport_delay=0)
-    competitor = _job(1, 1, 0, 1, (0, 1))
+    competitor = _job(1, 1, 0, 1, (0, 4))
     low_surplus = _job(2, 1, 0, 1, (0, 3))
     mixed_view = _online_view([visible, competitor, low_surplus], [entity, low_entity], [Machine(0)], future={0: 0, 1: 0})
     mixed_diag = compute_recoverability_diagnostics(mixed_view, state)
     mixed_ready = collect_ready_operations(mixed_view, state)
 
     assert _should_trigger_due_to_bottleneck_competition(mixed_view, state, mixed_diag, mixed_ready)
+
+
+def test_strict_bottleneck_trigger_ignores_short_low_risk_competitor():
+    high_entity = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=12, transport_delay=0)
+    low_entity = ServiceEntity(1, deadline=40, rho=0.5, weight=1.0, total_quantity=2, transport_delay=0)
+    mandatory = _job(0, 0, 0, 5, (0, 5))
+    short_competitor = _job(1, 1, 0, 1, (0, 1))
+    low_surplus = _job(2, 1, 0, 1, (1, 6))
+    view = _online_view(
+        [mandatory, short_competitor, low_surplus],
+        [high_entity, low_entity],
+        [Machine(0), Machine(1)],
+        future={0: 0, 1: 0},
+    )
+    state = _state(machines=(0, 1))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    assert _should_trigger_due_to_bottleneck_competition(
+        view, state, diagnostics, ready_ops, mode="normal"
+    )
+    assert not _should_trigger_due_to_bottleneck_competition(
+        view, state, diagnostics, ready_ops, mode="strict"
+    )
 
 
 def test_affected_set_excludes_future_jobs_and_respects_cap():

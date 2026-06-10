@@ -29,12 +29,35 @@ def main() -> None:
         type=Path,
         default=PROJECT_ROOT / "results" / "paper_a_online",
     )
+    parser.add_argument("--rg-H-A", type=int, dest="rg_H_A")
+    parser.add_argument("--rg-N-A", type=int, dest="rg_N_A")
+    parser.add_argument(
+        "--rg-acceptance-mode",
+        choices=["service_first", "service_safe_z"],
+    )
+    parser.add_argument(
+        "--rg-bottleneck-trigger-mode",
+        choices=["normal", "strict"],
+    )
     args = parser.parse_args()
+
+    rg_overrides = {
+        key: value
+        for key, value in {
+            "H_A": args.rg_H_A,
+            "N_A": args.rg_N_A,
+            "acceptance_mode": args.rg_acceptance_mode,
+            "bottleneck_trigger_mode": args.rg_bottleneck_trigger_mode,
+        }.items()
+        if value is not None
+    }
+    config_overrides = {"rg_ralns": rg_overrides} if rg_overrides else None
 
     result = run_paper_a_online_benchmark(
         config_path=args.config,
         seeds=args.seeds,
         output_dir=args.output,
+        config_overrides=config_overrides,
     )
     for name, path in result["outputs"].items():
         print(f"{name}: {path}")

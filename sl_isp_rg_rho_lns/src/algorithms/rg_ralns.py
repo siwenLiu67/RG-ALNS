@@ -45,6 +45,8 @@ class RGRALNSConfig:
     random_seed: int = 42
     destroy_fraction: float = 0.35
     enable_alns: bool = True
+    acceptance_mode: str = "service_safe_z"
+    bottleneck_trigger_mode: str = "strict"
 
     def __post_init__(self) -> None:
         if self.H_A <= 0:
@@ -57,6 +59,10 @@ class RGRALNSConfig:
             raise ValueError("eps must be positive")
         if not (0.0 < self.destroy_fraction <= 1.0):
             raise ValueError("destroy_fraction must be in (0, 1]")
+        if self.acceptance_mode not in {"service_first", "service_safe_z"}:
+            raise ValueError("acceptance_mode must be 'service_first' or 'service_safe_z'")
+        if self.bottleneck_trigger_mode not in {"normal", "strict"}:
+            raise ValueError("bottleneck_trigger_mode must be 'normal' or 'strict'")
 
 
 @dataclass(frozen=True)
@@ -287,19 +293,36 @@ def _should_trigger_due_to_bottleneck_competition(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready_ops: list[ReadyOperation],
+    mode: str = "strict",
 ) -> bool:
-    del problem, state
+    del state
     by_machine: dict[int, list[ReadyOperation]] = {}
     for ready in ready_ops:
         by_machine.setdefault(ready.machine_id, []).append(ready)
 
     for machine_ready in by_machine.values():
+        if mode == "normal":
+            has_high_risk = any(
+                diagnostics.job_entity.get(ready.job_id) in diagnostics.high_risk_entities
+                for ready in machine_ready
+            )
+            has_low_risk = any(
+                diagnostics.job_entity.get(ready.job_id) not in diagnostics.high_risk_entities
+                for ready in machine_ready
+            )
+            if has_high_risk and has_low_risk:
+                return True
+            continue
+
+        median_pt = _median_processing_time(machine_ready)
         has_high_risk = any(
-            diagnostics.job_entity.get(ready.job_id) in diagnostics.high_risk_entities
+            ready.job_id in diagnostics.mandatory_jobs
+            or ready.job_id in diagnostics.cover_jobs
             for ready in machine_ready
         )
         has_low_risk = any(
             diagnostics.job_entity.get(ready.job_id) not in diagnostics.high_risk_entities
+            and ready.processing_time >= median_pt
             for ready in machine_ready
         )
         if has_high_risk and has_low_risk:
@@ -376,6 +399,7 @@ def construct_affected_set(
     ready_ops: list[ReadyOperation] | None = None,
     *,
     H_A: int,
+    bottleneck_trigger_mode: str = "strict",
 ) -> set[int]:
     """Construct A(t), freeze non-mutable work, and apply the H_A cap."""
 
@@ -414,11 +438,13 @@ def construct_affected_set(
     candidate_jobs.update(competitor_jobs)
 
     bottleneck_machines = _bottleneck_machines(diagnostics, ready)
-    bottleneck_competitors = {
-        ready_op.job_id
-        for ready_op in ready
-        if ready_op.machine_id in bottleneck_machines
-    }
+    bottleneck_competitors = _bottleneck_competitor_jobs(
+        problem,
+        diagnostics,
+        ready,
+        bottleneck_machines,
+        bottleneck_trigger_mode,
+    )
     candidate_jobs.update(bottleneck_competitors)
 
     frozen_removed: set[int] = set()
@@ -481,6 +507,7 @@ class RGRALNS:
         self._repair_weights = {
             "mandatory_first": 1.0,
             "service_cover": 1.0,
+            "service_safe_edd_spt": 1.4,
             "recoverability_gain": 1.0,
             "rg_regret_k": 1.0,
             "edd_spt": 1.0,
@@ -536,6 +563,7 @@ class RGRALNS:
             diagnostics,
             ready_ops,
             H_A=self.config.H_A,
+            bottleneck_trigger_mode=self.config.bottleneck_trigger_mode,
         )
         self.last_affected_set = set(affected_set)
         self.affected_set_sizes.append(len(affected_set))
@@ -567,7 +595,7 @@ class RGRALNS:
             "mandatory_ready": _should_trigger_due_to_mandatory_ready(diagnostics, ready_ops),
             "high_risk_arrival": _should_trigger_due_to_high_risk_arrival(diagnostics),
             "bottleneck_competition": _should_trigger_due_to_bottleneck_competition(
-                problem, state, diagnostics, ready_ops
+                problem, state, diagnostics, ready_ops, self.config.bottleneck_trigger_mode
             ),
             "cover_violation": _should_trigger_due_to_cover_violation(
                 problem, state, diagnostics, ready_ops
@@ -629,6 +657,7 @@ class RGRALNS:
         repair_ops: dict[str, RepairOperator] = {
             "mandatory_first": _repair_mandatory_first,
             "service_cover": _repair_service_cover,
+            "service_safe_edd_spt": _repair_service_safe_edd_spt,
             "recoverability_gain": _repair_recoverability_gain,
             "rg_regret_k": self._repair_rg_regret_k,
             "edd_spt": _repair_edd_spt,
@@ -658,14 +687,24 @@ class RGRALNS:
                 self.config,
             )
 
-            accepted = _accept_candidate(candidate_eval, incumbent_eval, self.config.eps)
+            accepted = _accept_candidate(
+                candidate_eval,
+                incumbent_eval,
+                self.config.eps,
+                self.config.acceptance_mode,
+            )
             if accepted:
                 current_order = list(candidate_order)
                 incumbent = candidate
                 incumbent_eval = candidate_eval
                 self._destroy_weights[destroy_name] += 0.2
                 self._repair_weights[repair_name] += 0.2
-                if _accept_candidate(candidate_eval, best_eval, self.config.eps):
+                if _accept_candidate(
+                    candidate_eval,
+                    best_eval,
+                    self.config.eps,
+                    self.config.acceptance_mode,
+                ):
                     best = candidate
                     best_eval = candidate_eval
             else:
@@ -883,6 +922,42 @@ def _bottleneck_machines(
     return bottlenecks
 
 
+def _median_processing_time(ready_ops: list[ReadyOperation]) -> float:
+    if not ready_ops:
+        return 0.0
+    pts = sorted(float(ready.processing_time) for ready in ready_ops)
+    mid = len(pts) // 2
+    if len(pts) % 2 == 1:
+        return pts[mid]
+    return (pts[mid - 1] + pts[mid]) / 2.0
+
+
+def _bottleneck_competitor_jobs(
+    problem: SchedulingProblem,
+    diagnostics: RGRALNSDiagnostics,
+    ready_ops: list[ReadyOperation],
+    bottleneck_machines: set[int],
+    mode: str,
+) -> set[int]:
+    by_machine: dict[int, list[ReadyOperation]] = {}
+    for ready in ready_ops:
+        if ready.machine_id in bottleneck_machines:
+            by_machine.setdefault(ready.machine_id, []).append(ready)
+
+    competitors: set[int] = set()
+    for machine_ready in by_machine.values():
+        median_pt = _median_processing_time(machine_ready)
+        for ready in machine_ready:
+            if mode == "normal":
+                competitors.add(ready.job_id)
+                continue
+            job = _visible_job(problem, ready.job_id)
+            rank = _service_rank(job, diagnostics)
+            if rank >= 3 or ready.processing_time >= median_pt:
+                competitors.add(ready.job_id)
+    return competitors
+
+
 def _initial_local_order(
     problem: SchedulingProblem,
     state: ScheduleState,
@@ -1020,10 +1095,31 @@ def _accept_candidate(
     candidate: CandidateEvaluation,
     incumbent: CandidateEvaluation,
     eps: float,
+    acceptance_mode: str = "service_safe_z",
 ) -> bool:
     for entity_id, risk in candidate.risk_by_entity.items():
         if risk > incumbent.risk_by_entity.get(entity_id, 0.0) + eps:
             return False
+
+    if (
+        acceptance_mode == "service_safe_z"
+        and incumbent.wsf <= eps
+        and candidate.wsf <= eps
+    ):
+        if candidate.z < incumbent.z - eps:
+            return True
+        if abs(candidate.z - incumbent.z) <= eps and candidate.tt < incumbent.tt - eps:
+            return True
+        if (
+            abs(candidate.z - incumbent.z) <= eps
+            and abs(candidate.tt - incumbent.tt) <= eps
+            and candidate.instability < incumbent.instability - eps
+        ):
+            return True
+        return False
+
+    if incumbent.wsf <= eps and candidate.wsf > incumbent.wsf + eps:
+        return False
     if candidate.wsf < incumbent.wsf - eps:
         return True
     if abs(candidate.wsf - incumbent.wsf) <= eps and candidate.z < incumbent.z - eps:
@@ -1228,6 +1324,34 @@ def _repair_service_cover(
     )
 
 
+def _repair_service_safe_edd_spt(
+    kept: list[int],
+    removed: list[int],
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+) -> list[int]:
+    all_jobs = _dedupe_order(kept + removed, set(kept + removed))
+    service_critical = [
+        job_id
+        for job_id in all_jobs
+        if job_id in diagnostics.mandatory_jobs or job_id in diagnostics.cover_jobs
+    ]
+    remaining = [job_id for job_id in all_jobs if job_id not in set(service_critical)]
+    service_critical.sort(
+        key=lambda job_id: (
+            _service_rank(_visible_job(problem, job_id), diagnostics),
+            _effective_production_deadline(problem, _visible_job(problem, job_id)),
+            _remaining_job_work(_visible_job(problem, job_id), state),
+            job_id,
+        )
+    )
+    remaining.sort(
+        key=lambda job_id: _tt_oriented_insertion_key(problem, state, job_id)
+    )
+    return service_critical + remaining
+
+
 def _repair_recoverability_gain(
     kept: list[int],
     removed: list[int],
@@ -1263,6 +1387,33 @@ def _repair_edd_spt(
             job_id,
         ),
     )
+
+
+def _tt_oriented_insertion_key(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    job_id: int,
+) -> tuple[int, float, float, float, int]:
+    job = _visible_job(problem, job_id)
+    entity = problem.get_entity(job.entity_id)
+    remaining_work = _remaining_job_work(job, state)
+    projected_delivery = max(state.current_time, job.release_time) + remaining_work + entity.transport_delay
+    projected_tardiness = max(0.0, projected_delivery - entity.deadline)
+    next_pt = _next_operation_min_processing_time(job, state)
+    return (
+        _effective_production_deadline(problem, job),
+        projected_tardiness,
+        next_pt,
+        remaining_work,
+        job_id,
+    )
+
+
+def _next_operation_min_processing_time(job: Job, state: ScheduleState) -> float:
+    next_idx = state.next_op_index_for_job(job.job_id)
+    if next_idx >= job.num_operations:
+        return 0.0
+    return float(job.operation_at(next_idx).min_processing_time)
 
 
 def _recoverability_gain(
@@ -1424,6 +1575,8 @@ __all__ = [
     "lightweight_rg_dispatch",
     "run_lightweight_rg_dispatch",
     "run_rg_ralns",
+    "_accept_candidate",
+    "_repair_service_safe_edd_spt",
     "_should_trigger_due_to_bottleneck_competition",
     "_should_trigger_due_to_cover_violation",
     "_should_trigger_due_to_high_risk_arrival",

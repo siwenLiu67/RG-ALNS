@@ -38,7 +38,9 @@ algorithms:
 
 rg_ralns:
   H_A: 8
-  N_A: 8
+  N_A: 20
+  acceptance_mode: service_safe_z
+  bottleneck_trigger_mode: normal
   regret_k: 2
   eps: 1.0e-9
   destroy_fraction: 0.35

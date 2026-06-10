@@ -80,6 +80,14 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
         config_path=config_path,
         seeds=[0],
         output_dir=output_dir,
+        config_overrides={
+            "rg_ralns": {
+                "H_A": 4,
+                "N_A": 2,
+                "acceptance_mode": "service_safe_z",
+                "bottleneck_trigger_mode": "normal",
+            }
+        },
     )
 
     expected_files = {
@@ -106,9 +114,15 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
     assert all(row["objective_scope"] == "global_final" for row in per_instance)
 
     mechanism_rows = _read_csv(output_dir / "mechanism_stats.csv")
-    assert {"trigger_count", "trigger_ratio", "number_of_events", "number_of_decision_events"}.issubset(
+    assert {"trigger_count", "trigger_ratio", "algorithm_call_count", "number_of_events", "number_of_decision_events"}.issubset(
         mechanism_rows[0]
     )
+    assert all(float(row["trigger_ratio"]) <= 1.0 for row in mechanism_rows)
+
+    config_used = yaml.safe_load((output_dir / "config_used.yaml").read_text(encoding="utf-8"))
+    assert config_used["rg_ralns"]["H_A"] == 4
+    assert config_used["rg_ralns"]["N_A"] == 2
+    assert config_used["rg_ralns"]["bottleneck_trigger_mode"] == "normal"
 
 
 def test_protocol_statement_is_available_for_paper_text():

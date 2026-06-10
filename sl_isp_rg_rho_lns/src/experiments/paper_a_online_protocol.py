@@ -8,7 +8,6 @@ visibility mode and a shared current-time commit validator.
 from __future__ import annotations
 
 import csv
-import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -323,12 +322,15 @@ def run_paper_a_online_benchmark(
     config_path: str | Path,
     seeds: list[int],
     output_dir: str | Path,
+    config_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the Paper A online benchmark and write CSV/YAML outputs."""
 
     config_path = Path(config_path)
     output_dir = Path(output_dir)
     config = load_paper_a_config(config_path)
+    if config_overrides:
+        config = _apply_config_overrides(config, config_overrides)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     specs = _select_algorithm_specs(config)
@@ -367,13 +369,29 @@ def run_paper_a_online_benchmark(
     _write_csv(Path(outputs["mechanism_stats_csv"]), mechanism_rows)
     _write_csv(Path(outputs["trigger_reason_counts_csv"]), trigger_rows)
     _write_csv(Path(outputs["results_summary_csv"]), summary_rows)
-    shutil.copyfile(config_path, outputs["config_used_yaml"])
+    with Path(outputs["config_used_yaml"]).open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(config, fh, sort_keys=False)
 
     return {
         "outputs": outputs,
         "per_instance_rows": len(per_instance_rows),
         "summary_rows": len(summary_rows),
     }
+
+
+def _apply_config_overrides(
+    config: dict[str, Any],
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(config)
+    for section, values in overrides.items():
+        if not isinstance(values, dict):
+            merged[section] = values
+            continue
+        current = dict(merged.get(section, {}))
+        current.update(values)
+        merged[section] = current
+    return merged
 
 
 def _run_one_algorithm(
@@ -430,14 +448,16 @@ def _run_one_algorithm(
 
     trigger_count = _attr(wrapped.inner, "trigger_count", 0)
     number_of_events = wrapped.number_of_events
+    algorithm_call_count = wrapped.call_count
     mechanism = {
         **base,
         "trigger_count": trigger_count,
-        "trigger_ratio": trigger_count / max(1, number_of_events),
+        "trigger_ratio": trigger_count / max(1, algorithm_call_count),
         "avg_A_size": _attr(wrapped.inner, "avg_A_size", 0.0),
         "max_A_size": _attr(wrapped.inner, "max_A_size", 0),
         "alns_runtime_total": _attr(wrapped.inner, "alns_runtime_total", 0.0),
         "dispatch_fallback_count": _attr(wrapped.inner, "dispatch_fallback_count", 0),
+        "algorithm_call_count": algorithm_call_count,
         "number_of_events": number_of_events,
         "number_of_decision_events": wrapped.number_of_decision_events,
     }
@@ -533,6 +553,8 @@ def _rg_ralns_kwargs(config: dict[str, Any], seed: int) -> dict[str, Any]:
         "eps": cfg.get("eps", 1e-9),
         "random_seed": cfg.get("random_seed", seed),
         "destroy_fraction": cfg.get("destroy_fraction", 0.35),
+        "acceptance_mode": cfg.get("acceptance_mode", "service_safe_z"),
+        "bottleneck_trigger_mode": cfg.get("bottleneck_trigger_mode", "strict"),
     }
 
 
