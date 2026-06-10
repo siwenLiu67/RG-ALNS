@@ -45,6 +45,16 @@ def main() -> None:
         nargs="+",
         help="Override objective.beta_sensitivity values for normalized objective analysis.",
     )
+    parser.add_argument(
+        "--objective-beta",
+        type=float,
+        help="Override objective.beta_0 for the main normalized objective setting.",
+    )
+    parser.add_argument(
+        "--rg-debug-trace",
+        action="store_true",
+        help="Write RG-RALNS event trace rows for diagnostic runs.",
+    )
     args = parser.parse_args()
 
     rg_overrides = {
@@ -57,7 +67,13 @@ def main() -> None:
         }.items()
         if value is not None
     }
-    config_overrides = {"rg_ralns": rg_overrides} if rg_overrides else None
+    config_overrides = {}
+    if rg_overrides:
+        config_overrides["rg_ralns"] = rg_overrides
+    if args.objective_beta is not None:
+        config_overrides["objective"] = {"beta_0": args.objective_beta}
+    if not config_overrides:
+        config_overrides = None
 
     result = run_paper_a_online_benchmark(
         config_path=args.config,
@@ -65,6 +81,7 @@ def main() -> None:
         output_dir=args.output,
         config_overrides=config_overrides,
         beta_sensitivity=args.beta_sensitivity,
+        rg_debug_trace=args.rg_debug_trace,
     )
     for name, path in result["outputs"].items():
         print(f"{name}: {path}")

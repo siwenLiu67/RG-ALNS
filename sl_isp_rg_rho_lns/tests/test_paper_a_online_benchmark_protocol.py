@@ -69,7 +69,14 @@ def _write_config(path: Path, *, online_visibility: bool = True) -> None:
             "beta_0": 20.0,
             "beta_sensitivity": [1, 5, 20],
         },
-        "rg_ralns": {"H_A": 6, "N_A": 3},
+        "rg_ralns": {
+            "H_A": 6,
+            "N_A": 3,
+            "rescue_fallback_enabled": True,
+            "protect_zero_wsf": True,
+            "adaptive_destroy_size": True,
+            "tt_polish_max_moves": 0,
+        },
         "legacy_rg_alns": {"horizon": 80, "lns_iterations": 2},
     }
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -175,6 +182,10 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
         "trigger_reason_counts_csv",
         "objective_calibration_csv",
         "beta_sensitivity_summary_csv",
+        "rg_ralns_event_trace_seed2_csv",
+        "operator_stats_csv",
+        "fallback_stats_csv",
+        "tuning_comparison_csv",
         "config_used_yaml",
     }
     assert set(result["outputs"]) == expected_files
@@ -213,7 +224,7 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
     assert {"mean_Z_N", "mean_normalized_Z", "mean_TT_hat", "mean_WSF_hat"}.issubset(summary_rows[0])
 
     mechanism_rows = _read_csv(output_dir / "mechanism_stats.csv")
-    assert {"trigger_count", "trigger_ratio", "algorithm_call_count", "number_of_events", "number_of_decision_events"}.issubset(
+    assert {"trigger_count", "trigger_ratio", "algorithm_call_count", "number_of_events", "number_of_decision_events", "rescue_fallback_success_count"}.issubset(
         mechanism_rows[0]
     )
     assert all(float(row["trigger_ratio"]) <= 1.0 for row in mechanism_rows)
@@ -222,6 +233,7 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
     assert config_used["rg_ralns"]["H_A"] == 4
     assert config_used["rg_ralns"]["N_A"] == 2
     assert config_used["rg_ralns"]["bottleneck_trigger_mode"] == "normal"
+    assert config_used["rg_ralns"]["rescue_fallback_enabled"] is True
     assert config_used["objective"]["beta_0"] == 20.0
 
     calibration_rows = _read_csv(output_dir / "objective_calibration.csv")
@@ -245,6 +257,10 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
         "mean_runtime",
         "rank_by_Z_N",
     }.issubset(sensitivity_rows[0])
+
+    assert _read_csv(output_dir / "operator_stats.csv")
+    assert _read_csv(output_dir / "fallback_stats.csv")
+    assert _read_csv(output_dir / "tuning_comparison.csv")
 
 
 def test_protocol_statement_is_available_for_paper_text():

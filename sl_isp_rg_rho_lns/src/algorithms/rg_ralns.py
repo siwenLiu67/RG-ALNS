@@ -47,6 +47,14 @@ class RGRALNSConfig:
     enable_alns: bool = True
     acceptance_mode: str = "service_safe_z"
     bottleneck_trigger_mode: str = "strict"
+    rescue_fallback_enabled: bool = True
+    protect_zero_wsf: bool = True
+    adaptive_destroy_size: bool = True
+    destroy_fraction_low: float = 0.25
+    destroy_fraction_mid: float = 0.35
+    destroy_fraction_high: float = 0.50
+    tt_polish_max_moves: int = 0
+    debug_trace: bool = False
 
     def __post_init__(self) -> None:
         if self.H_A <= 0:
@@ -63,6 +71,12 @@ class RGRALNSConfig:
             raise ValueError("acceptance_mode must be 'service_first' or 'service_safe_z'")
         if self.bottleneck_trigger_mode not in {"normal", "strict"}:
             raise ValueError("bottleneck_trigger_mode must be 'normal' or 'strict'")
+        for name in ("destroy_fraction_low", "destroy_fraction_mid", "destroy_fraction_high"):
+            value = getattr(self, name)
+            if not (0.0 < value <= 1.0):
+                raise ValueError(f"{name} must be in (0, 1]")
+        if self.tt_polish_max_moves < 0:
+            raise ValueError("tt_polish_max_moves must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -392,6 +406,70 @@ def lightweight_rg_dispatch(
     return decisions
 
 
+def _rescue_fallback_dispatch(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready_ops: list[ReadyOperation] | None = None,
+    *,
+    allowed_jobs: set[int] | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """Service-safe rescue dispatch used before ordinary fallback."""
+
+    ready = list(ready_ops if ready_ops is not None else collect_ready_operations(problem, state))
+    if allowed_jobs is not None:
+        ready = [item for item in ready if item.job_id in allowed_jobs]
+    rescue_ready = [
+        item for item in ready
+        if _service_rank(_visible_job(problem, item.job_id), diagnostics) <= 2
+    ]
+    if not rescue_ready:
+        return []
+
+    decisions: list[tuple[int, int, int, int]] = []
+    assigned_ops: set[tuple[int, int]] = set()
+    assigned_machines: set[int] = set()
+    idle_machines = sorted(
+        machine.machine_id
+        for machine in problem.machines
+        if state.is_machine_idle(machine.machine_id)
+    )
+
+    for machine_id in idle_machines:
+        candidates = [
+            ready_op
+            for ready_op in rescue_ready
+            if ready_op.machine_id == machine_id
+            and ready_op.machine_id not in assigned_machines
+            and (ready_op.job_id, ready_op.op_id) not in assigned_ops
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda item: _rescue_fallback_priority(problem, diagnostics, item))
+        selected = candidates[0]
+        decisions.append((selected.job_id, selected.op_id, selected.machine_id, state.current_time))
+        assigned_ops.add((selected.job_id, selected.op_id))
+        assigned_machines.add(selected.machine_id)
+
+    return decisions
+
+
+def _rescue_fallback_priority(
+    problem: SchedulingProblem,
+    diagnostics: RGRALNSDiagnostics,
+    ready: ReadyOperation,
+) -> tuple[int, int, int, float, int, int]:
+    job = _visible_job(problem, ready.job_id)
+    return (
+        _service_rank(job, diagnostics),
+        _effective_production_deadline(problem, job),
+        ready.processing_time,
+        -_marginal_service_quantity(job, diagnostics),
+        job.job_id,
+        ready.op_id,
+    )
+
+
 def construct_affected_set(
     problem: SchedulingProblem,
     state: ScheduleState,
@@ -489,13 +567,25 @@ class RGRALNS:
         self.affected_set_sizes: list[int] = []
         self.alns_runtime_total = 0.0
         self.dispatch_fallback_count = 0
+        self.rescue_fallback_count = 0
+        self.ordinary_fallback_count = 0
+        self.rescue_fallback_success_count = 0
+        self.fallback_failure_reason_counts: dict[str, int] = {}
         self.diagnostic_history: list[dict] = []
+        self.event_trace_rows: list[dict] = []
+        self._call_count = 0
 
         self.last_triggered = False
         self.last_trigger_reasons: dict[str, bool] = {}
         self.last_affected_set: set[int] = set()
         self.last_local_job_order: list[int] = []
         self.last_diagnostics: RGRALNSDiagnostics | None = None
+        self.last_local_eval: CandidateEvaluation | None = None
+        self.last_best_eval: CandidateEvaluation | None = None
+        self.last_fallback_used = False
+        self.last_fallback_reason = ""
+        self.last_accepted = False
+        self.last_acceptance_reason = ""
 
         self._destroy_weights = {
             "blocking_mandatory": 1.0,
@@ -512,6 +602,14 @@ class RGRALNS:
             "rg_regret_k": 1.0,
             "edd_spt": 1.0,
         }
+        self._operator_stats = {
+            f"destroy:{name}": {"num_selected": 0, "num_accepted": 0, "total_reward": 0.0}
+            for name in self._destroy_weights
+        }
+        self._operator_stats.update({
+            f"repair:{name}": {"num_selected": 0, "num_accepted": 0, "total_reward": 0.0}
+            for name in self._repair_weights
+        })
 
     @property
     def avg_A_size(self) -> float:
@@ -523,11 +621,37 @@ class RGRALNS:
     def max_A_size(self) -> int:
         return max(self.affected_set_sizes, default=0)
 
+    @property
+    def operator_stats_rows(self) -> list[dict]:
+        rows: list[dict] = []
+        weights = {
+            **{f"destroy:{name}": value for name, value in self._destroy_weights.items()},
+            **{f"repair:{name}": value for name, value in self._repair_weights.items()},
+        }
+        for name in sorted(self._operator_stats):
+            stats = self._operator_stats[name]
+            selected = stats["num_selected"]
+            rows.append({
+                "operator_name": name,
+                "num_selected": selected,
+                "num_accepted": stats["num_accepted"],
+                "mean_reward": stats["total_reward"] / selected if selected else 0.0,
+                "last_weight": weights.get(name, 0.0),
+            })
+        return rows
+
     def __call__(
         self,
         problem: SchedulingProblem,
         state: ScheduleState,
     ) -> list[tuple[int, int, int, int]]:
+        self._call_count += 1
+        self.last_local_eval = None
+        self.last_best_eval = None
+        self.last_fallback_used = False
+        self.last_fallback_reason = ""
+        self.last_accepted = False
+        self.last_acceptance_reason = ""
         visible_job_ids = {job.job_id for job in problem.jobs}
         newly_arrived = visible_job_ids - self._last_visible_job_ids
         self._last_visible_job_ids = set(visible_job_ids)
@@ -550,7 +674,9 @@ class RGRALNS:
         if not should_run_alns:
             self.last_affected_set = set()
             self.last_local_job_order = []
-            return lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+            decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+            self._record_event_trace(problem, state, diagnostics, ready_ops, decisions)
+            return decisions
 
         self.trigger_count += 1
         for reason, active in reasons.items():
@@ -570,8 +696,12 @@ class RGRALNS:
 
         if not affected_set:
             self.dispatch_fallback_count += 1
+            self.last_fallback_used = True
+            self.last_fallback_reason = "empty_affected_set"
             self.last_local_job_order = []
-            return lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+            decisions = self._fallback_dispatch(problem, state, diagnostics, ready_ops, affected_set)
+            self._record_event_trace(problem, state, diagnostics, ready_ops, decisions)
+            return decisions
 
         start = time.perf_counter()
         local_schedule = self._run_local_alns(problem, state, diagnostics, ready_ops, affected_set)
@@ -580,8 +710,44 @@ class RGRALNS:
         decisions = _extract_current_feasible_operations(problem, state, local_schedule, affected_set)
         if not decisions:
             self.dispatch_fallback_count += 1
-            decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+            self.last_fallback_used = True
+            self.last_fallback_reason = "empty_local_extraction"
+            decisions = self._fallback_dispatch(problem, state, diagnostics, ready_ops, affected_set)
+        self._record_event_trace(problem, state, diagnostics, ready_ops, decisions)
         return decisions
+
+    def _fallback_dispatch(
+        self,
+        problem: SchedulingProblem,
+        state: ScheduleState,
+        diagnostics: RGRALNSDiagnostics,
+        ready_ops: list[ReadyOperation],
+        affected_set: set[int],
+    ) -> list[tuple[int, int, int, int]]:
+        if self.config.rescue_fallback_enabled:
+            self.rescue_fallback_count += 1
+            decisions = _rescue_fallback_dispatch(
+                problem,
+                state,
+                diagnostics,
+                ready_ops,
+                allowed_jobs=affected_set or None,
+            )
+            if not decisions and affected_set:
+                self._count_fallback_failure("no_rescue_candidate_in_A")
+                decisions = _rescue_fallback_dispatch(problem, state, diagnostics, ready_ops)
+            if decisions:
+                self.rescue_fallback_success_count += 1
+                return decisions
+            self._count_fallback_failure("no_rescue_candidate_ready")
+
+        self.ordinary_fallback_count += 1
+        return lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+
+    def _count_fallback_failure(self, reason: str) -> None:
+        self.fallback_failure_reason_counts[reason] = (
+            self.fallback_failure_reason_counts.get(reason, 0) + 1
+        )
 
     def _trigger_reasons(
         self,
@@ -666,7 +832,9 @@ class RGRALNS:
         for _iter in range(self.config.N_A):
             destroy_name = _weighted_choice(self._rng, self._destroy_weights)
             repair_name = _weighted_choice(self._rng, self._repair_weights)
-            destroy_size = max(1, math.ceil(len(current_order) * self.config.destroy_fraction))
+            destroy_size = self._destroy_size(current_order, diagnostics, ready_ops)
+            self._operator_stats[f"destroy:{destroy_name}"]["num_selected"] += 1
+            self._operator_stats[f"repair:{repair_name}"]["num_selected"] += 1
             kept, removed = destroy_ops[destroy_name](
                 current_order,
                 problem,
@@ -677,6 +845,13 @@ class RGRALNS:
             )
             candidate_order = repair_ops[repair_name](kept, removed, problem, state, diagnostics)
             candidate_order = _dedupe_order(candidate_order, affected_set)
+            candidate_order = _tt_polish_order(
+                problem,
+                state,
+                diagnostics,
+                candidate_order,
+                max_moves=self.config.tt_polish_max_moves,
+            )
             candidate = _decode_local_sequence(problem, state, candidate_order)
             candidate_eval = _evaluate_local_schedule(
                 problem,
@@ -692,27 +867,114 @@ class RGRALNS:
                 incumbent_eval,
                 self.config.eps,
                 self.config.acceptance_mode,
+                self.config.protect_zero_wsf,
             )
+            reward = _operator_reward(candidate_eval, incumbent_eval, accepted, self.config.eps)
             if accepted:
+                self.last_accepted = True
+                self.last_acceptance_reason = _acceptance_reason(
+                    candidate_eval,
+                    incumbent_eval,
+                    self.config.eps,
+                )
                 current_order = list(candidate_order)
                 incumbent = candidate
                 incumbent_eval = candidate_eval
                 self._destroy_weights[destroy_name] += 0.2
                 self._repair_weights[repair_name] += 0.2
+                self._operator_stats[f"destroy:{destroy_name}"]["num_accepted"] += 1
+                self._operator_stats[f"repair:{repair_name}"]["num_accepted"] += 1
                 if _accept_candidate(
                     candidate_eval,
                     best_eval,
                     self.config.eps,
                     self.config.acceptance_mode,
+                    self.config.protect_zero_wsf,
                 ):
                     best = candidate
                     best_eval = candidate_eval
             else:
                 self._destroy_weights[destroy_name] = max(0.2, self._destroy_weights[destroy_name] * 0.99)
                 self._repair_weights[repair_name] = max(0.2, self._repair_weights[repair_name] * 0.99)
+            self._operator_stats[f"destroy:{destroy_name}"]["total_reward"] += reward
+            self._operator_stats[f"repair:{repair_name}"]["total_reward"] += reward
 
         self.last_local_job_order = list(best.job_order)
+        self.last_local_eval = incumbent_eval
+        self.last_best_eval = best_eval
         return best
+
+    def _destroy_size(
+        self,
+        current_order: list[int],
+        diagnostics: RGRALNSDiagnostics,
+        ready_ops: list[ReadyOperation],
+    ) -> int:
+        if not current_order:
+            return 0
+        if not self.config.adaptive_destroy_size:
+            fraction = self.config.destroy_fraction
+        elif _should_trigger_due_to_shortfall(diagnostics) or _should_trigger_due_to_mandatory_ready(diagnostics, ready_ops):
+            fraction = self.config.destroy_fraction_high
+        elif max((diag.u_info for diag in diagnostics.by_entity.values()), default=0.0) <= self.config.eps:
+            fraction = self.config.destroy_fraction_low
+        else:
+            fraction = self.config.destroy_fraction_mid
+        return max(1, min(len(current_order), math.ceil(len(current_order) * fraction)))
+
+    def _record_event_trace(
+        self,
+        problem: SchedulingProblem,
+        state: ScheduleState,
+        diagnostics: RGRALNSDiagnostics,
+        ready_ops: list[ReadyOperation],
+        decisions: list[tuple[int, int, int, int]],
+    ) -> None:
+        if not self.config.debug_trace:
+            return
+        first_decision = decisions[0] if decisions else None
+        selected_job = _visible_job(problem, first_decision[0]) if first_decision else None
+        selected_ready = None
+        if first_decision:
+            selected_ready = next(
+                (
+                    ready
+                    for ready in ready_ops
+                    if (ready.job_id, ready.op_id, ready.machine_id)
+                    == (first_decision[0], first_decision[1], first_decision[2])
+                ),
+                None,
+            )
+        self.event_trace_rows.append({
+            "event_index": len(self.event_trace_rows),
+            "time": state.current_time,
+            "event_type": "algorithm_call",
+            "algorithm_call_id": self._call_count,
+            "triggered_alns": self.last_triggered,
+            "trigger_reasons": _format_bool_reasons(self.last_trigger_reasons),
+            "U_info_by_entity": _format_entity_values({eid: diag.u_info for eid, diag in diagnostics.by_entity.items()}),
+            "Q_rem_by_entity": _format_entity_values({eid: diag.q_rem for eid, diag in diagnostics.by_entity.items()}),
+            "Q_rec_by_entity": _format_entity_values({eid: diag.q_rec for eid, diag in diagnostics.by_entity.items()}),
+            "Q_future_by_entity": _format_entity_values({eid: diag.q_future for eid, diag in diagnostics.by_entity.items()}),
+            "mandatory_jobs": _format_ints(diagnostics.mandatory_jobs),
+            "cover_jobs": _format_ints(diagnostics.cover_jobs),
+            "ready_jobs": _format_ints({ready.job_id for ready in ready_ops}),
+            "A_size": len(self.last_affected_set),
+            "A_jobs": _format_ints(self.last_affected_set),
+            "current_decisions": _format_decisions(decisions),
+            "fallback_used": self.last_fallback_used,
+            "fallback_reason": self.last_fallback_reason,
+            "selected_job_entity": "" if selected_job is None else selected_job.entity_id,
+            "selected_job_service_rank": "" if selected_job is None else _service_rank(selected_job, diagnostics),
+            "selected_machine": "" if selected_ready is None else selected_ready.machine_id,
+            "WSF_before_decision": _current_visible_wsf(problem, state),
+            "projected_WSF_after_local_plan": "" if self.last_best_eval is None else self.last_best_eval.wsf,
+            "candidate_Z_N": "",
+            "candidate_TT": "" if self.last_best_eval is None else self.last_best_eval.tt,
+            "candidate_WSF": "" if self.last_best_eval is None else self.last_best_eval.wsf,
+            "accepted": self.last_accepted,
+            "acceptance_reason": self.last_acceptance_reason,
+        })
 
     def _repair_rg_regret_k(
         self,
@@ -1096,6 +1358,7 @@ def _accept_candidate(
     incumbent: CandidateEvaluation,
     eps: float,
     acceptance_mode: str = "service_safe_z",
+    protect_zero_wsf: bool = True,
 ) -> bool:
     for entity_id, risk in candidate.risk_by_entity.items():
         if risk > incumbent.risk_by_entity.get(entity_id, 0.0) + eps:
@@ -1118,7 +1381,7 @@ def _accept_candidate(
             return True
         return False
 
-    if incumbent.wsf <= eps and candidate.wsf > incumbent.wsf + eps:
+    if protect_zero_wsf and incumbent.wsf <= eps and candidate.wsf > incumbent.wsf + eps:
         return False
     if candidate.wsf < incumbent.wsf - eps:
         return True
@@ -1131,6 +1394,39 @@ def _accept_candidate(
     ):
         return True
     return False
+
+
+def _acceptance_reason(
+    candidate: CandidateEvaluation,
+    incumbent: CandidateEvaluation,
+    eps: float,
+) -> str:
+    if candidate.wsf < incumbent.wsf - eps:
+        return "lower_wsf"
+    if candidate.z < incumbent.z - eps:
+        return "lower_z"
+    if candidate.tt < incumbent.tt - eps:
+        return "lower_tt"
+    if candidate.instability < incumbent.instability - eps:
+        return "lower_disruption"
+    return "tie_or_neutral"
+
+
+def _operator_reward(
+    candidate: CandidateEvaluation,
+    incumbent: CandidateEvaluation,
+    accepted: bool,
+    eps: float,
+) -> float:
+    if not accepted:
+        return 0.0
+    if candidate.wsf <= incumbent.wsf + eps and candidate.z < incumbent.z - eps:
+        return 3.0
+    if candidate.wsf < incumbent.wsf - eps:
+        return 2.0
+    if abs(candidate.wsf - incumbent.wsf) <= eps and candidate.tt < incumbent.tt - eps:
+        return 1.0
+    return 0.2
 
 
 def _extract_current_feasible_operations(
@@ -1175,6 +1471,41 @@ def _extract_current_feasible_operations(
         assigned_machines.add(sop.machine_id)
 
     return decisions
+
+
+def _tt_polish_order(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    order: list[int],
+    *,
+    max_moves: int,
+) -> list[int]:
+    if max_moves <= 0 or len(order) <= 2:
+        return order
+    critical = {
+        job_id
+        for job_id in order
+        if job_id in diagnostics.mandatory_jobs or job_id in diagnostics.cover_jobs
+    }
+    prefix = [job_id for job_id in order if job_id in critical]
+    suffix = [job_id for job_id in order if job_id not in critical]
+    polished_suffix = sorted(
+        suffix,
+        key=lambda job_id: _tt_oriented_insertion_key(problem, state, job_id),
+    )
+    if max_moves < len(suffix):
+        limited: list[int] = []
+        changed = 0
+        for old, new in zip(suffix, polished_suffix, strict=False):
+            if old != new and changed >= max_moves:
+                limited.append(old)
+            else:
+                limited.append(new)
+                if old != new:
+                    changed += 1
+        polished_suffix = _dedupe_order(limited + polished_suffix, set(suffix))
+    return prefix + polished_suffix
 
 
 def _destroy_blocking_mandatory(
@@ -1561,6 +1892,37 @@ def _next_ready_machines(
     return set(op.eligible_machines)
 
 
+def _current_visible_wsf(problem: SchedulingProblem, state: ScheduleState) -> float:
+    on_time_quantity = {entity.entity_id: 0.0 for entity in problem.entities}
+    for job in problem.jobs:
+        completion = state.completed_jobs.get(job.job_id)
+        if completion is None:
+            continue
+        entity = problem.get_entity(job.entity_id)
+        if completion + entity.transport_delay <= entity.deadline:
+            on_time_quantity[entity.entity_id] += float(job.quantity)
+    total = 0.0
+    for entity in problem.entities:
+        total += entity.weight * max(0.0, float(entity.min_fulfillment) - on_time_quantity[entity.entity_id])
+    return total
+
+
+def _format_ints(values: set[int] | list[int]) -> str:
+    return ";".join(str(value) for value in sorted(values))
+
+
+def _format_bool_reasons(values: dict[str, bool]) -> str:
+    return ";".join(name for name, active in sorted(values.items()) if active)
+
+
+def _format_entity_values(values: dict[int, float]) -> str:
+    return ";".join(f"{entity_id}:{value:.6g}" for entity_id, value in sorted(values.items()))
+
+
+def _format_decisions(decisions: list[tuple[int, int, int, int]]) -> str:
+    return ";".join(f"{job}:{op}:{machine}:{start}" for job, op, machine, start in decisions)
+
+
 __all__ = [
     "CandidateEvaluation",
     "EntityDiagnostics",
@@ -1576,6 +1938,7 @@ __all__ = [
     "run_lightweight_rg_dispatch",
     "run_rg_ralns",
     "_accept_candidate",
+    "_rescue_fallback_dispatch",
     "_repair_service_safe_edd_spt",
     "_should_trigger_due_to_bottleneck_competition",
     "_should_trigger_due_to_cover_violation",

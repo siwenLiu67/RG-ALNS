@@ -385,6 +385,7 @@ def run_paper_a_online_benchmark(
     output_dir: str | Path,
     config_overrides: dict[str, Any] | None = None,
     beta_sensitivity: list[float] | None = None,
+    rg_debug_trace: bool = False,
 ) -> dict[str, Any]:
     """Run the Paper A online benchmark and write CSV/YAML outputs."""
 
@@ -397,6 +398,10 @@ def run_paper_a_online_benchmark(
     if beta_sensitivity is not None:
         objective_cfg["beta_sensitivity"] = [float(value) for value in beta_sensitivity]
     config["objective"] = objective_cfg
+    if rg_debug_trace:
+        rg_cfg = dict(config.get("rg_ralns", {}))
+        rg_cfg["debug_trace"] = True
+        config["rg_ralns"] = rg_cfg
     output_dir.mkdir(parents=True, exist_ok=True)
 
     specs = _select_algorithm_specs(config)
@@ -404,6 +409,9 @@ def run_paper_a_online_benchmark(
     mechanism_rows: list[dict[str, Any]] = []
     trigger_rows: list[dict[str, Any]] = []
     calibration_rows: list[dict[str, Any]] = []
+    event_trace_rows: list[dict[str, Any]] = []
+    operator_rows: list[dict[str, Any]] = []
+    fallback_rows: list[dict[str, Any]] = []
 
     for instance_key, instance_cfg in config.get("instances", {}).items():
         num_instances = int(instance_cfg.get("num_instances", 1))
@@ -422,7 +430,7 @@ def run_paper_a_online_benchmark(
                     calibration,
                 ))
                 for spec in specs:
-                    row, mechanism, trigger_counts = _run_one_algorithm(
+                    row, mechanism, trigger_counts, event_trace, operator_stats, fallback_stats = _run_one_algorithm(
                         instance=instance,
                         instance_key=instance_key,
                         instance_index=instance_index,
@@ -434,6 +442,9 @@ def run_paper_a_online_benchmark(
                     per_instance_rows.append(row)
                     mechanism_rows.append(mechanism)
                     trigger_rows.extend(trigger_counts)
+                    event_trace_rows.extend(event_trace)
+                    operator_rows.extend(operator_stats)
+                    fallback_rows.extend(fallback_stats)
 
     summary_rows = _summarize_results(per_instance_rows)
     sensitivity_rows = _summarize_beta_sensitivity(
@@ -449,6 +460,10 @@ def run_paper_a_online_benchmark(
         "trigger_reason_counts_csv": str(output_dir / "trigger_reason_counts.csv"),
         "objective_calibration_csv": str(output_dir / "objective_calibration.csv"),
         "beta_sensitivity_summary_csv": str(output_dir / "beta_sensitivity_summary.csv"),
+        "rg_ralns_event_trace_seed2_csv": str(output_dir / "rg_ralns_event_trace_seed2.csv"),
+        "operator_stats_csv": str(output_dir / "operator_stats.csv"),
+        "fallback_stats_csv": str(output_dir / "fallback_stats.csv"),
+        "tuning_comparison_csv": str(output_dir / "tuning_comparison.csv"),
         "config_used_yaml": str(output_dir / "config_used.yaml"),
     }
     _write_csv(Path(outputs["per_instance_results_csv"]), per_instance_rows)
@@ -456,6 +471,13 @@ def run_paper_a_online_benchmark(
     _write_csv(Path(outputs["trigger_reason_counts_csv"]), trigger_rows)
     _write_csv(Path(outputs["objective_calibration_csv"]), calibration_rows)
     _write_csv(Path(outputs["beta_sensitivity_summary_csv"]), sensitivity_rows)
+    _write_csv(Path(outputs["rg_ralns_event_trace_seed2_csv"]), event_trace_rows)
+    _write_csv(Path(outputs["operator_stats_csv"]), operator_rows)
+    _write_csv(Path(outputs["fallback_stats_csv"]), fallback_rows)
+    _write_csv(
+        Path(outputs["tuning_comparison_csv"]),
+        _tuning_comparison_rows(summary_rows, mechanism_rows, beta_0=objective_cfg["beta_0"]),
+    )
     _write_csv(Path(outputs["results_summary_csv"]), summary_rows)
     with Path(outputs["config_used_yaml"]).open("w", encoding="utf-8") as fh:
         yaml.safe_dump(config, fh, sort_keys=False)
@@ -537,7 +559,14 @@ def _run_one_algorithm(
     spec: PaperAAlgorithmSpec,
     config: dict[str, Any],
     calibration: ObjectiveCalibration,
-) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     algorithm = create_paper_a_algorithm(spec, seed=seed, algorithm_config=config)
     wrapped = CurrentTimeCommitWrapper(algorithm, label=spec.label)
     start = time.perf_counter()
@@ -605,6 +634,9 @@ def _run_one_algorithm(
         "max_A_size": _attr(wrapped.inner, "max_A_size", 0),
         "alns_runtime_total": _attr(wrapped.inner, "alns_runtime_total", 0.0),
         "dispatch_fallback_count": _attr(wrapped.inner, "dispatch_fallback_count", 0),
+        "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
+        "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
+        "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
         "algorithm_call_count": algorithm_call_count,
         "number_of_events": number_of_events,
         "number_of_decision_events": wrapped.number_of_decision_events,
@@ -613,7 +645,27 @@ def _run_one_algorithm(
         {**base, "trigger_reason": reason, "count": count}
         for reason, count in dict(_attr(wrapped.inner, "trigger_reason_counts", {})).items()
     ]
-    return row, mechanism, trigger_rows
+    event_trace_rows = [
+        {**base, **trace_row}
+        for trace_row in list(_attr(wrapped.inner, "event_trace_rows", []))
+    ]
+    operator_rows = [
+        {**base, **operator_row}
+        for operator_row in list(_attr(wrapped.inner, "operator_stats_rows", []))
+    ]
+    fallback_rows = [
+        {**base, "fallback_reason": reason, "count": count}
+        for reason, count in dict(_attr(wrapped.inner, "fallback_failure_reason_counts", {})).items()
+    ]
+    fallback_rows.append({
+        **base,
+        "fallback_reason": "summary",
+        "dispatch_fallback_count": _attr(wrapped.inner, "dispatch_fallback_count", 0),
+        "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
+        "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
+        "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+    })
+    return row, mechanism, trigger_rows, event_trace_rows, operator_rows, fallback_rows
 
 
 def _select_algorithm_specs(config: dict[str, Any]) -> list[PaperAAlgorithmSpec]:
@@ -703,6 +755,14 @@ def _rg_ralns_kwargs(config: dict[str, Any], seed: int) -> dict[str, Any]:
         "destroy_fraction": cfg.get("destroy_fraction", 0.35),
         "acceptance_mode": cfg.get("acceptance_mode", "service_safe_z"),
         "bottleneck_trigger_mode": cfg.get("bottleneck_trigger_mode", "strict"),
+        "rescue_fallback_enabled": cfg.get("rescue_fallback_enabled", True),
+        "protect_zero_wsf": cfg.get("protect_zero_wsf", True),
+        "adaptive_destroy_size": cfg.get("adaptive_destroy_size", True),
+        "destroy_fraction_low": cfg.get("destroy_fraction_low", 0.25),
+        "destroy_fraction_mid": cfg.get("destroy_fraction_mid", 0.35),
+        "destroy_fraction_high": cfg.get("destroy_fraction_high", 0.50),
+        "tt_polish_max_moves": cfg.get("tt_polish_max_moves", 0),
+        "debug_trace": cfg.get("debug_trace", False),
     }
 
 
@@ -748,6 +808,37 @@ def _summarize_results(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "mean_runtime": _mean(ok_rows, "runtime"),
         })
     return summary
+
+
+def _tuning_comparison_rows(
+    summary_rows: list[dict[str, Any]],
+    mechanism_rows: list[dict[str, Any]],
+    *,
+    beta_0: float,
+) -> list[dict[str, Any]]:
+    mechanism_by_algorithm: dict[str, list[dict[str, Any]]] = {}
+    for row in mechanism_rows:
+        mechanism_by_algorithm.setdefault(row["algorithm"], []).append(row)
+
+    rows: list[dict[str, Any]] = []
+    for row in summary_rows:
+        mech = mechanism_by_algorithm.get(row["algorithm"], [])
+        rows.append({
+            "config_name": "paper_a_rg_ralns_tuned",
+            "beta_0": beta_0,
+            "algorithm": row["algorithm"],
+            "algorithm_label": row["algorithm_label"],
+            "mean_Z_N": row["mean_Z_N"],
+            "mean_TT": row["mean_TT"],
+            "mean_WSF": row["mean_WSF"],
+            "mean_ZSR": row["mean_ZSR"],
+            "mean_runtime": row["mean_runtime"],
+            "mean_trigger_ratio": _mean(mech, "trigger_ratio"),
+            "mean_avg_A_size": _mean(mech, "avg_A_size"),
+            "mean_dispatch_fallback_count": _mean(mech, "dispatch_fallback_count"),
+            "mean_rescue_fallback_success_count": _mean(mech, "rescue_fallback_success_count"),
+        })
+    return rows
 
 
 def _summarize_beta_sensitivity(

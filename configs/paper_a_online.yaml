@@ -44,9 +44,16 @@ objective:
 
 rg_ralns:
   H_A: 8
-  N_A: 20
+  N_A: 40
   acceptance_mode: service_safe_z
   bottleneck_trigger_mode: normal
+  rescue_fallback_enabled: true
+  protect_zero_wsf: true
+  adaptive_destroy_size: true
+  destroy_fraction_low: 0.25
+  destroy_fraction_mid: 0.35
+  destroy_fraction_high: 0.50
+  tt_polish_max_moves: 0
   regret_k: 2
   eps: 1.0e-9
   destroy_fraction: 0.35

@@ -11,6 +11,7 @@ from src.algorithms.rg_ralns import (
     construct_affected_set,
     lightweight_rg_dispatch,
     _accept_candidate,
+    _rescue_fallback_dispatch,
     _repair_service_safe_edd_spt,
     _should_trigger_due_to_bottleneck_competition,
     _should_trigger_due_to_cover_violation,
@@ -336,6 +337,40 @@ def test_lightweight_rg_dispatch_runs_when_no_trigger_holds():
     decision = lightweight_rg_dispatch(view, state, diagnostics, ready_ops)
 
     assert decision == [(1, 10, 0, 0)]
+
+
+def test_rescue_fallback_dispatch_prioritizes_ready_mandatory_jobs():
+    high = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=50, rho=0.5, weight=1.0, total_quantity=2, transport_delay=0)
+    mandatory = _job(0, 0, 0, 5, (0, 8))
+    low_spt = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view([low_spt, mandatory], [high, low], [Machine(0)], future={0: 0, 1: 0})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    decisions = _rescue_fallback_dispatch(view, state, diagnostics, ready_ops)
+
+    assert decisions == [(0, 0, 0, 0)]
+
+
+def test_rg_ralns_fallback_dispatch_records_rescue_success():
+    high = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=50, rho=0.5, weight=1.0, total_quantity=2, transport_delay=0)
+    mandatory = _job(0, 0, 0, 5, (0, 8))
+    low_spt = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view([low_spt, mandatory], [high, low], [Machine(0)], future={0: 0, 1: 0})
+    state = _state(machines=(0,))
+    algo = RGRALNS(RGRALNSConfig(H_A=2, N_A=0, random_seed=3))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    decisions = algo._fallback_dispatch(view, state, diagnostics, ready_ops, affected_set={0})
+
+    assert decisions == [(0, 0, 0, 0)]
+    assert algo.rescue_fallback_count == 1
+    assert algo.rescue_fallback_success_count == 1
+    assert algo.ordinary_fallback_count == 0
 
 
 def test_local_alns_runs_only_on_affected_set():
