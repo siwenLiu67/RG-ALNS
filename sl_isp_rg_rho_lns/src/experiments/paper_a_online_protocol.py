@@ -29,6 +29,7 @@ from src.algorithms.dispatching_rules import edd_rule, sfg_rule, swd_rule
 from src.algorithms.rg_ralns import run_lightweight_rg_dispatch, run_rg_ralns
 from src.algorithms.rg_rho_lns_fast import run_rg_alns
 from src.core.dataclasses import ScheduledOperation, SLISPInstance
+from src.core.objective import ObjectiveResult
 from src.core.online import OnlineProblemView
 from src.core.schedule_state import ScheduleState
 from src.core.simulator import run_simulation
@@ -62,6 +63,18 @@ class PaperAAlgorithmSpec:
     online_visibility: bool
 
 
+@dataclass(frozen=True)
+class ObjectiveCalibration:
+    """Instance-level objective scale calibration for Paper A evaluation."""
+
+    Theta_I: float
+    Omega_I: float
+    alpha_0: float
+    beta_0: float
+    alpha_I: float
+    beta_I: float
+
+
 class DecisionValidationError(ValueError):
     """Raised when an algorithm violates current-time execution policy."""
 
@@ -88,7 +101,7 @@ def default_paper_a_algorithm_specs(
         ),
         PaperAAlgorithmSpec(
             "online_legacy_rg_alns",
-            "Online-Legacy-RG-ALNS",
+            "Online-Legacy-ALNS",
             "legacy_rg_alns",
             "main_online",
             True,
@@ -105,7 +118,7 @@ def default_paper_a_algorithm_specs(
         specs.append(
             PaperAAlgorithmSpec(
                 "offline_legacy_rg_alns",
-                "Offline-Legacy-RG-ALNS",
+                "Offline-Legacy-ALNS",
                 "legacy_rg_alns",
                 "offline_oracle",
                 False,
@@ -256,6 +269,54 @@ def extract_current_feasible_decisions(
     return extracted
 
 
+def compute_objective_calibration(
+    instance: SLISPInstance,
+    *,
+    alpha_0: float,
+    beta_0: float,
+) -> ObjectiveCalibration:
+    """Compute instance-level scales for normalized Paper A evaluation."""
+
+    theta = 0.0
+    for job in instance.jobs:
+        entity = instance.get_entity(job.entity_id)
+        effective_deadline = entity.deadline - entity.transport_delay
+        theta += max(1.0, float(effective_deadline - job.release_time))
+
+    omega = 0.0
+    for entity in instance.entities:
+        # Keep the current project convention: min_fulfillment is deterministic
+        # and equals max(1.0, rho_r * Q_r), without introducing a new rounding rule.
+        omega += float(entity.weight) * float(entity.min_fulfillment)
+
+    theta = max(theta, 1.0)
+    omega = max(omega, 1.0)
+    return ObjectiveCalibration(
+        Theta_I=theta,
+        Omega_I=omega,
+        alpha_0=float(alpha_0),
+        beta_0=float(beta_0),
+        alpha_I=float(alpha_0) / theta,
+        beta_I=float(beta_0) / omega,
+    )
+
+
+def evaluate_normalized_objective(
+    objective: ObjectiveResult,
+    calibration: ObjectiveCalibration,
+) -> dict[str, float]:
+    """Evaluate TT_hat, WSF_hat, and normalized_Z for one final schedule."""
+
+    tt_hat = objective.total_tardiness / calibration.Theta_I
+    wsf_hat = objective.weighted_service_shortfall / calibration.Omega_I
+    normalized_z = calibration.alpha_0 * tt_hat + calibration.beta_0 * wsf_hat
+    return {
+        "TT_hat": tt_hat,
+        "WSF_hat": wsf_hat,
+        "normalized_Z": normalized_z,
+    }
+
+
 def create_paper_a_algorithm(
     spec: PaperAAlgorithmSpec,
     *,
@@ -323,6 +384,7 @@ def run_paper_a_online_benchmark(
     seeds: list[int],
     output_dir: str | Path,
     config_overrides: dict[str, Any] | None = None,
+    beta_sensitivity: list[float] | None = None,
 ) -> dict[str, Any]:
     """Run the Paper A online benchmark and write CSV/YAML outputs."""
 
@@ -331,18 +393,34 @@ def run_paper_a_online_benchmark(
     config = load_paper_a_config(config_path)
     if config_overrides:
         config = _apply_config_overrides(config, config_overrides)
+    objective_cfg = _objective_config(config)
+    if beta_sensitivity is not None:
+        objective_cfg["beta_sensitivity"] = [float(value) for value in beta_sensitivity]
+    config["objective"] = objective_cfg
     output_dir.mkdir(parents=True, exist_ok=True)
 
     specs = _select_algorithm_specs(config)
     per_instance_rows: list[dict[str, Any]] = []
     mechanism_rows: list[dict[str, Any]] = []
     trigger_rows: list[dict[str, Any]] = []
+    calibration_rows: list[dict[str, Any]] = []
 
     for instance_key, instance_cfg in config.get("instances", {}).items():
         num_instances = int(instance_cfg.get("num_instances", 1))
         for instance_index in range(num_instances):
             for seed in seeds:
                 instance = _build_instance(instance_key, instance_cfg, seed, instance_index)
+                calibration = compute_objective_calibration(
+                    instance,
+                    alpha_0=objective_cfg["alpha_0"],
+                    beta_0=objective_cfg["beta_0"],
+                )
+                calibration_rows.append(_calibration_row(
+                    instance_key,
+                    instance_index,
+                    seed,
+                    calibration,
+                ))
                 for spec in specs:
                     row, mechanism, trigger_counts = _run_one_algorithm(
                         instance=instance,
@@ -351,23 +429,33 @@ def run_paper_a_online_benchmark(
                         seed=seed,
                         spec=spec,
                         config=config,
+                        calibration=calibration,
                     )
                     per_instance_rows.append(row)
                     mechanism_rows.append(mechanism)
                     trigger_rows.extend(trigger_counts)
 
     summary_rows = _summarize_results(per_instance_rows)
+    sensitivity_rows = _summarize_beta_sensitivity(
+        per_instance_rows,
+        beta_values=objective_cfg["beta_sensitivity"],
+        alpha_0=objective_cfg["alpha_0"],
+    )
 
     outputs = {
         "results_summary_csv": str(output_dir / "results_summary.csv"),
         "per_instance_results_csv": str(output_dir / "per_instance_results.csv"),
         "mechanism_stats_csv": str(output_dir / "mechanism_stats.csv"),
         "trigger_reason_counts_csv": str(output_dir / "trigger_reason_counts.csv"),
+        "objective_calibration_csv": str(output_dir / "objective_calibration.csv"),
+        "beta_sensitivity_summary_csv": str(output_dir / "beta_sensitivity_summary.csv"),
         "config_used_yaml": str(output_dir / "config_used.yaml"),
     }
     _write_csv(Path(outputs["per_instance_results_csv"]), per_instance_rows)
     _write_csv(Path(outputs["mechanism_stats_csv"]), mechanism_rows)
     _write_csv(Path(outputs["trigger_reason_counts_csv"]), trigger_rows)
+    _write_csv(Path(outputs["objective_calibration_csv"]), calibration_rows)
+    _write_csv(Path(outputs["beta_sensitivity_summary_csv"]), sensitivity_rows)
     _write_csv(Path(outputs["results_summary_csv"]), summary_rows)
     with Path(outputs["config_used_yaml"]).open("w", encoding="utf-8") as fh:
         yaml.safe_dump(config, fh, sort_keys=False)
@@ -376,6 +464,52 @@ def run_paper_a_online_benchmark(
         "outputs": outputs,
         "per_instance_rows": len(per_instance_rows),
         "summary_rows": len(summary_rows),
+        "sensitivity_rows": len(sensitivity_rows),
+    }
+
+
+def _objective_config(config: dict[str, Any]) -> dict[str, Any]:
+    cfg = dict(config.get("objective", {}))
+    objective_type = cfg.get("type", "normalized")
+    if objective_type != "normalized":
+        raise ValueError("Paper A objective.type must be 'normalized'")
+    alpha_0 = float(cfg.get("alpha_0", 1.0))
+    beta_0 = float(cfg.get("beta_0", 20.0))
+    if alpha_0 < 0 or beta_0 < 0:
+        raise ValueError("alpha_0 and beta_0 must be non-negative")
+    beta_sensitivity = [float(value) for value in cfg.get(
+        "beta_sensitivity",
+        [1, 5, 10, 20, 50, 100],
+    )]
+    if any(value < 0 for value in beta_sensitivity):
+        raise ValueError("beta_sensitivity values must be non-negative")
+    return {
+        "type": "normalized",
+        "alpha_0": alpha_0,
+        "beta_0": beta_0,
+        "beta_sensitivity": beta_sensitivity,
+    }
+
+
+def _calibration_row(
+    instance_key: str,
+    instance_index: int,
+    seed: int,
+    calibration: ObjectiveCalibration,
+) -> dict[str, Any]:
+    return {
+        "experiment_protocol": "paper_a_online",
+        "instance_id": f"{instance_key}:{instance_index}:seed{seed}",
+        "instance": instance_key,
+        "instance_index": instance_index,
+        "seed": seed,
+        "Theta_I": calibration.Theta_I,
+        "Omega_I": calibration.Omega_I,
+        "alpha_0": calibration.alpha_0,
+        "beta_0": calibration.beta_0,
+        "alpha_I": calibration.alpha_I,
+        "beta_I": calibration.beta_I,
+        "q_min_rule": "max(1.0, rho_r * Q_r)",
     }
 
 
@@ -402,6 +536,7 @@ def _run_one_algorithm(
     seed: int,
     spec: PaperAAlgorithmSpec,
     config: dict[str, Any],
+    calibration: ObjectiveCalibration,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     algorithm = create_paper_a_algorithm(spec, seed=seed, algorithm_config=config)
     wrapped = CurrentTimeCommitWrapper(algorithm, label=spec.label)
@@ -436,12 +571,25 @@ def _run_one_algorithm(
         "status": status,
         "runtime": round(runtime, 6),
     }
+    normalized = evaluate_normalized_objective(obj, calibration) if obj is not None else {}
     row = {
         **base,
-        "Z": "" if obj is None else obj.Z,
+        "objective_type": "normalized",
+        "Z_original": "" if obj is None else obj.Z,
+        "Z_N": normalized.get("normalized_Z", ""),
+        "normalized_Z": normalized.get("normalized_Z", ""),
         "TT": "" if obj is None else obj.total_tardiness,
         "WSF": "" if obj is None else obj.weighted_service_shortfall,
+        "TT_hat": normalized.get("TT_hat", ""),
+        "WSF_hat": normalized.get("WSF_hat", ""),
+        "ZSR": "" if obj is None else obj.zero_shortfall_entity_rate,
         "zero_shortfall_entity_rate": "" if obj is None else obj.zero_shortfall_entity_rate,
+        "Theta_I": calibration.Theta_I,
+        "Omega_I": calibration.Omega_I,
+        "alpha_0": calibration.alpha_0,
+        "beta_0": calibration.beta_0,
+        "alpha_I": calibration.alpha_I,
+        "beta_I": calibration.beta_I,
         "error_type": error_type,
         "error_message": error_message,
     }
@@ -588,13 +736,93 @@ def _summarize_results(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "table_group": group,
             "runs": len(group_rows),
             "ok_runs": len(ok_rows),
-            "mean_Z": _mean(ok_rows, "Z"),
+            "mean_Z_N": _mean(ok_rows, "Z_N"),
+            "mean_normalized_Z": _mean(ok_rows, "normalized_Z"),
+            "mean_Z_original": _mean(ok_rows, "Z_original"),
             "mean_TT": _mean(ok_rows, "TT"),
             "mean_WSF": _mean(ok_rows, "WSF"),
+            "mean_TT_hat": _mean(ok_rows, "TT_hat"),
+            "mean_WSF_hat": _mean(ok_rows, "WSF_hat"),
+            "mean_ZSR": _mean(ok_rows, "ZSR"),
             "mean_zero_shortfall_entity_rate": _mean(ok_rows, "zero_shortfall_entity_rate"),
             "mean_runtime": _mean(ok_rows, "runtime"),
         })
     return summary
+
+
+def _summarize_beta_sensitivity(
+    rows: list[dict[str, Any]],
+    *,
+    beta_values: list[float],
+    alpha_0: float,
+) -> list[dict[str, Any]]:
+    summary_rows: list[dict[str, Any]] = []
+    for beta_0 in beta_values:
+        groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault(
+                (row["algorithm"], row["algorithm_label"], row["table_group"]),
+                [],
+            ).append(row)
+
+        beta_rows: list[dict[str, Any]] = []
+        for (algorithm, label, group), group_rows in sorted(groups.items()):
+            ok_rows = [row for row in group_rows if row["status"] == "OK"]
+            mean_tt_hat = _mean(ok_rows, "TT_hat")
+            mean_wsf_hat = _mean(ok_rows, "WSF_hat")
+            if mean_tt_hat == "" or mean_wsf_hat == "":
+                mean_z_n: float | str = ""
+            else:
+                mean_z_n = alpha_0 * float(mean_tt_hat) + beta_0 * float(mean_wsf_hat)
+            beta_rows.append({
+                "beta_0": beta_0,
+                "algorithm": algorithm,
+                "algorithm_label": label,
+                "table_group": group,
+                "runs": len(group_rows),
+                "ok_runs": len(ok_rows),
+                "mean_Z_N": mean_z_n,
+                "mean_TT": _mean(ok_rows, "TT"),
+                "mean_WSF": _mean(ok_rows, "WSF"),
+                "mean_TT_hat": mean_tt_hat,
+                "mean_WSF_hat": mean_wsf_hat,
+                "mean_ZSR": _mean(ok_rows, "ZSR"),
+                "mean_runtime": _mean(ok_rows, "runtime"),
+            })
+
+        ranked = sorted(
+            [row for row in beta_rows if row["mean_Z_N"] != ""],
+            key=lambda row: (float(row["mean_Z_N"]), row["algorithm"]),
+        )
+        for rank, row in enumerate(ranked, start=1):
+            row["rank_by_Z_N"] = rank
+        _add_rg_gap_columns(beta_rows)
+        summary_rows.extend(beta_rows)
+    return summary_rows
+
+
+def _add_rg_gap_columns(rows: list[dict[str, Any]]) -> None:
+    values = {row["algorithm"]: row for row in rows if row["mean_Z_N"] != ""}
+    rg = values.get("rg_ralns")
+    targets = {
+        "edd": "vs_EDD_gap_percent",
+        "lightweight_rg_dispatch": "vs_Lightweight_RG_gap_percent",
+        "online_legacy_rg_alns": "vs_Online_Legacy_ALNS_gap_percent",
+    }
+    for row in rows:
+        for column in targets.values():
+            row[column] = ""
+    if rg is None:
+        return
+    rg_value = float(rg["mean_Z_N"])
+    for target, column in targets.items():
+        baseline = values.get(target)
+        if baseline is None:
+            continue
+        baseline_value = float(baseline["mean_Z_N"])
+        if abs(baseline_value) <= 1e-12:
+            continue
+        rg[column] = (rg_value - baseline_value) / baseline_value * 100.0
 
 
 def _mean(rows: list[dict[str, Any]], key: str) -> float | str:
@@ -626,9 +854,12 @@ __all__ = [
     "CurrentTimeCommitWrapper",
     "DecisionValidationError",
     "PROTOCOL_STATEMENT",
+    "ObjectiveCalibration",
     "PaperAAlgorithmSpec",
+    "compute_objective_calibration",
     "create_paper_a_algorithm",
     "default_paper_a_algorithm_specs",
+    "evaluate_normalized_objective",
     "extract_current_feasible_decisions",
     "load_paper_a_config",
     "run_paper_a_online_benchmark",

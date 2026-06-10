@@ -87,6 +87,7 @@ def test_online_legacy_rg_alns_uses_visible_backlog_only():
 
     assert spec.online_visibility is True
     assert spec.table_group == "main_online"
+    assert spec.label == "Online-Legacy-ALNS"
     assert decisions
     assert {job_id for job_id, _op_id, _machine_id, _start in decisions} == {0}
 
@@ -99,6 +100,8 @@ def test_online_and_offline_legacy_rg_alns_are_clearly_separated():
 
     assert online.online_visibility is True
     assert online.table_group == "main_online"
+    assert online.label == "Online-Legacy-ALNS"
     assert offline.online_visibility is False
     assert offline.table_group == "offline_oracle"
+    assert offline.label == "Offline-Legacy-ALNS"
     assert "offline_legacy_rg_alns" not in main_keys

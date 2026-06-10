@@ -39,6 +39,12 @@ def main() -> None:
         "--rg-bottleneck-trigger-mode",
         choices=["normal", "strict"],
     )
+    parser.add_argument(
+        "--beta-sensitivity",
+        type=float,
+        nargs="+",
+        help="Override objective.beta_sensitivity values for normalized objective analysis.",
+    )
     args = parser.parse_args()
 
     rg_overrides = {
@@ -58,6 +64,7 @@ def main() -> None:
         seeds=args.seeds,
         output_dir=args.output,
         config_overrides=config_overrides,
+        beta_sensitivity=args.beta_sensitivity,
     )
     for name, path in result["outputs"].items():
         print(f"{name}: {path}")

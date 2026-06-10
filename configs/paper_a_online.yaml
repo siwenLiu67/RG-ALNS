@@ -36,6 +36,12 @@ algorithms:
   offline_oracle:
     - offline_legacy_rg_alns
 
+objective:
+  type: normalized
+  alpha_0: 1.0
+  beta_0: 20.0
+  beta_sensitivity: [1, 5, 10, 20, 50, 100]
+
 rg_ralns:
   H_A: 8
   N_A: 20
