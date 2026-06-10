@@ -396,13 +396,13 @@ codex/rg-ralns-performance-tuning
 Commit hash after modification:
 
 ```text
-pending at first log creation
+9161f39 feat: tune RG-RALNS service-safe fallback and performance diagnostics
 ```
 
 Push status:
 
 ```text
-pending at first log creation
+pending before push attempt
 ```
 
 If push fails, recovery command:
