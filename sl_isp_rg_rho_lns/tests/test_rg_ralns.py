@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.algorithms.rg_ralns import (
     CandidateEvaluation,
+    LocalSchedule,
     RGRALNS,
     RGRALNSConfig,
     compute_recoverability_diagnostics,
@@ -11,6 +12,7 @@ from src.algorithms.rg_ralns import (
     construct_affected_set,
     lightweight_rg_dispatch,
     _accept_candidate,
+    _extract_current_feasible_operations,
     _rescue_fallback_dispatch,
     _repair_service_safe_edd_spt,
     _should_trigger_due_to_bottleneck_competition,
@@ -368,9 +370,124 @@ def test_rg_ralns_fallback_dispatch_records_rescue_success():
     decisions = algo._fallback_dispatch(view, state, diagnostics, ready_ops, affected_set={0})
 
     assert decisions == [(0, 0, 0, 0)]
-    assert algo.rescue_fallback_count == 1
-    assert algo.rescue_fallback_success_count == 1
+    assert algo.affected_set_rescue_success_count == 1
+    assert algo.rescue_fallback_count == 0
+    assert algo.rescue_fallback_success_count == 0
     assert algo.ordinary_fallback_count == 0
+    assert algo.last_fallback_reason == "affected_set_rescue_success"
+
+
+def test_local_extraction_skips_non_rescue_prefix_and_selects_ready_mandatory():
+    high = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=50, rho=0.5, weight=1.0, total_quantity=2, transport_delay=0)
+    mandatory = _job(0, 0, 0, 5, (0, 8))
+    low_spt = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view([low_spt, mandatory], [high, low], [Machine(0)], future={0: 0, 1: 0})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+    local_schedule = LocalSchedule(
+        job_order=[1, 0],
+        scheduled_operations=[
+            ScheduledOperation(job_id=1, op_id=10, machine_id=0, start_time=0, end_time=1),
+            ScheduledOperation(job_id=0, op_id=0, machine_id=0, start_time=5, end_time=13),
+        ],
+        completion_times={1: 1, 0: 13},
+    )
+
+    decisions = _extract_current_feasible_operations(
+        view,
+        state,
+        local_schedule,
+        {0, 1},
+        diagnostics,
+        ready_ops,
+    )
+
+    assert decisions == [(0, 0, 0, 0)]
+
+
+def test_ready_mandatory_job_cannot_be_excluded_by_affected_set_cap():
+    high = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    mandatory = _job(0, 0, 0, 5, (0, 8))
+    competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 5)]
+    view = _online_view([*competitors, mandatory], [high, low], [Machine(0)], future={0: 0, 1: 10})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=1)
+
+    assert affected == {0}
+
+
+def test_affected_set_rescue_dispatch_runs_before_ordinary_fallback():
+    service = ServiceEntity(0, deadline=30, rho=0.5, weight=1.0, total_quantity=10, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    cover = _job(0, 0, 0, 1, (0, 8))
+    other_cover = _job(2, 0, 0, 1, (0, 9))
+    low_spt = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view([low_spt, cover, other_cover], [service, low], [Machine(0)], future={0: 4, 1: 10})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+    algo = RGRALNS(RGRALNSConfig(H_A=2, N_A=0, random_seed=4))
+
+    decisions = algo._fallback_dispatch(view, state, diagnostics, ready_ops, affected_set={0})
+
+    assert decisions == [(0, 0, 0, 0)]
+    assert algo.affected_set_rescue_success_count == 1
+    assert algo.rescue_fallback_success_count == 0
+    assert algo.ordinary_fallback_count == 0
+    assert algo.last_fallback_reason == "affected_set_rescue_success"
+
+
+def test_ordinary_fallback_is_allowed_when_no_rescue_candidate_exists():
+    stable = ServiceEntity(0, deadline=50, rho=0.1, weight=1.0, total_quantity=10, transport_delay=0)
+    ordinary = _job(0, 0, 0, 1, (0, 1))
+    view = _online_view([ordinary], [stable], [Machine(0)], future={0: 9})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+    algo = RGRALNS(RGRALNSConfig(H_A=1, N_A=0, random_seed=5))
+
+    decisions = algo._fallback_dispatch(view, state, diagnostics, ready_ops, affected_set={0})
+
+    assert decisions == [(0, 0, 0, 0)]
+    assert algo.affected_set_rescue_success_count == 0
+    assert algo.rescue_fallback_success_count == 0
+    assert algo.ordinary_fallback_count == 1
+    assert algo.last_fallback_reason == "ordinary_fallback_used"
+    assert algo.fallback_failure_reason_counts["affected_set_no_ready_rescue"] == 1
+
+
+def test_service_ready_extraction_keeps_future_jobs_invisible():
+    entity = ServiceEntity(0, deadline=30, rho=1.0, weight=1.0, total_quantity=6, transport_delay=0)
+    visible = _job(0, 0, 0, 3, (0, 3))
+    hidden_future = _job(99, 0, 10, 3, (0, 1))
+    view = _online_view([visible], [entity], [Machine(0)], future={0: hidden_future.quantity})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+    local_schedule = LocalSchedule(
+        job_order=[99, 0],
+        scheduled_operations=[
+            ScheduledOperation(job_id=99, op_id=990, machine_id=0, start_time=0, end_time=1),
+        ],
+        completion_times={99: 1},
+    )
+
+    decisions = _extract_current_feasible_operations(
+        view,
+        state,
+        local_schedule,
+        {99},
+        diagnostics,
+        ready_ops,
+    )
+
+    assert decisions == []
 
 
 def test_local_alns_runs_only_on_affected_set():

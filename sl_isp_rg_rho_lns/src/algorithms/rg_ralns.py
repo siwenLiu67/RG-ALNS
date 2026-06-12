@@ -570,6 +570,8 @@ class RGRALNS:
         self.rescue_fallback_count = 0
         self.ordinary_fallback_count = 0
         self.rescue_fallback_success_count = 0
+        self.local_extraction_success_count = 0
+        self.affected_set_rescue_success_count = 0
         self.fallback_failure_reason_counts: dict[str, int] = {}
         self.diagnostic_history: list[dict] = []
         self.event_trace_rows: list[dict] = []
@@ -707,11 +709,21 @@ class RGRALNS:
         local_schedule = self._run_local_alns(problem, state, diagnostics, ready_ops, affected_set)
         self.alns_runtime_total += time.perf_counter() - start
 
-        decisions = _extract_current_feasible_operations(problem, state, local_schedule, affected_set)
+        decisions = _extract_current_feasible_operations(
+            problem,
+            state,
+            local_schedule,
+            affected_set,
+            diagnostics,
+            ready_ops,
+        )
+        if decisions:
+            self.local_extraction_success_count += 1
         if not decisions:
             self.dispatch_fallback_count += 1
             self.last_fallback_used = True
-            self.last_fallback_reason = "empty_local_extraction"
+            self.last_fallback_reason = "local_plan_no_executable_operation"
+            self._count_fallback_failure("local_plan_no_executable_operation")
             decisions = self._fallback_dispatch(problem, state, diagnostics, ready_ops, affected_set)
         self._record_event_trace(problem, state, diagnostics, ready_ops, decisions)
         return decisions
@@ -724,25 +736,41 @@ class RGRALNS:
         ready_ops: list[ReadyOperation],
         affected_set: set[int],
     ) -> list[tuple[int, int, int, int]]:
-        if self.config.rescue_fallback_enabled:
-            self.rescue_fallback_count += 1
+        if affected_set:
             decisions = _rescue_fallback_dispatch(
                 problem,
                 state,
                 diagnostics,
                 ready_ops,
-                allowed_jobs=affected_set or None,
+                allowed_jobs=affected_set,
             )
-            if not decisions and affected_set:
-                self._count_fallback_failure("no_rescue_candidate_in_A")
-                decisions = _rescue_fallback_dispatch(problem, state, diagnostics, ready_ops)
+            if decisions:
+                self.affected_set_rescue_success_count += 1
+                self.last_fallback_reason = "affected_set_rescue_success"
+                self._count_fallback_failure("affected_set_rescue_success")
+                return decisions
+            self._count_fallback_failure("affected_set_no_ready_rescue")
+
+        if self.config.rescue_fallback_enabled:
+            self.rescue_fallback_count += 1
+            decisions = _rescue_fallback_dispatch(problem, state, diagnostics, ready_ops)
             if decisions:
                 self.rescue_fallback_success_count += 1
+                self.last_fallback_reason = "rescue_fallback_success"
+                self._count_fallback_failure("rescue_fallback_success")
                 return decisions
-            self._count_fallback_failure("no_rescue_candidate_ready")
+            if ready_ops:
+                self._count_fallback_failure("no_rescue_candidate_ready")
 
         self.ordinary_fallback_count += 1
-        return lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+        decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+        if decisions:
+            self.last_fallback_reason = "ordinary_fallback_used"
+            self._count_fallback_failure("ordinary_fallback_used")
+        else:
+            self.last_fallback_reason = "no_ready_operation_available"
+            self._count_fallback_failure("no_ready_operation_available")
+        return decisions
 
     def _count_fallback_failure(self, reason: str) -> None:
         self.fallback_failure_reason_counts[reason] = (
@@ -1132,7 +1160,7 @@ def _affected_cap_priority(
     job_id: int,
     ready_jobs: set[int],
     bottleneck_competitors: set[int],
-) -> tuple[int, int, int, int, int, int, float, int]:
+) -> tuple[int, int, int, int, int, int, int, int, float, int]:
     job = _visible_job(problem, job_id)
     entity_id = job.entity_id
     new_high_risk = (
@@ -1140,8 +1168,12 @@ def _affected_cap_priority(
         and entity_id in diagnostics.high_risk_entities
     )
     ready_high_risk = job_id in ready_jobs and entity_id in diagnostics.high_risk_entities
+    ready_mandatory = job_id in ready_jobs and job_id in diagnostics.mandatory_jobs
+    ready_cover = job_id in ready_jobs and job_id in diagnostics.cover_jobs
     return (
+        0 if ready_mandatory else 1,
         0 if job_id in diagnostics.mandatory_jobs else 1,
+        0 if ready_cover else 1,
         0 if job_id in diagnostics.cover_jobs else 1,
         0 if new_high_risk else 1,
         0 if ready_high_risk else 1,
@@ -1434,20 +1466,18 @@ def _extract_current_feasible_operations(
     state: ScheduleState,
     local_schedule: LocalSchedule,
     affected_set: set[int],
+    diagnostics: RGRALNSDiagnostics | None = None,
+    ready_ops: list[ReadyOperation] | None = None,
 ) -> list[tuple[int, int, int, int]]:
-    decisions: list[tuple[int, int, int, int]] = []
-    assigned_ops: set[tuple[int, int]] = set()
-    assigned_machines: set[int] = set()
     visible_job_ids = {job.job_id for job in problem.jobs}
+    ready_by_key = {
+        (ready.job_id, ready.op_id, ready.machine_id): ready
+        for ready in (ready_ops if ready_ops is not None else collect_ready_operations(problem, state))
+    }
+    candidates: dict[tuple[int, int, int], ReadyOperation] = {}
 
-    for sop in sorted(local_schedule.scheduled_operations, key=lambda item: (item.machine_id, item.job_id, item.op_id)):
-        if sop.start_time != state.current_time:
-            continue
+    for sop in local_schedule.scheduled_operations:
         if sop.job_id not in affected_set or sop.job_id not in visible_job_ids:
-            continue
-        if (sop.job_id, sop.op_id) in assigned_ops or sop.machine_id in assigned_machines:
-            continue
-        if not state.is_machine_idle(sop.machine_id):
             continue
         job = _visible_job(problem, sop.job_id)
         if job.release_time > state.current_time or state.is_job_completed(job.job_id):
@@ -1463,13 +1493,78 @@ def _extract_current_feasible_operations(
         if state.is_operation_ongoing(job.job_id, op.op_id):
             continue
         try:
-            op.processing_time_on(sop.machine_id)
+            pt = op.processing_time_on(sop.machine_id)
         except KeyError:
             continue
-        decisions.append((sop.job_id, sop.op_id, sop.machine_id, state.current_time))
-        assigned_ops.add((sop.job_id, sop.op_id))
-        assigned_machines.add(sop.machine_id)
+        if not state.is_machine_idle(sop.machine_id):
+            continue
 
+        key = (sop.job_id, sop.op_id, sop.machine_id)
+        candidates[key] = ready_by_key.get(
+            key,
+            ReadyOperation(
+                job_id=sop.job_id,
+                op_id=sop.op_id,
+                machine_id=sop.machine_id,
+                processing_time=pt,
+            ),
+        )
+
+    return _select_current_ready_decisions(problem, state, list(candidates.values()), diagnostics)
+
+
+def _select_current_ready_decisions(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    ready_ops: list[ReadyOperation],
+    diagnostics: RGRALNSDiagnostics | None,
+) -> list[tuple[int, int, int, int]]:
+    decisions: list[tuple[int, int, int, int]] = []
+    assigned_ops: set[tuple[int, int]] = set()
+    assigned_machines: set[int] = set()
+
+    def priority(ready: ReadyOperation) -> tuple[int, int, int, float, int, int]:
+        if diagnostics is not None:
+            return _rescue_fallback_priority(problem, diagnostics, ready)
+        job = _visible_job(problem, ready.job_id)
+        return (
+            3,
+            _effective_production_deadline(problem, job),
+            ready.processing_time,
+            0.0,
+            ready.job_id,
+            ready.op_id,
+        )
+
+    for ready in sorted(ready_ops, key=priority):
+        op_key = (ready.job_id, ready.op_id)
+        if op_key in assigned_ops or ready.machine_id in assigned_machines:
+            continue
+        if not state.is_machine_idle(ready.machine_id):
+            continue
+        try:
+            job = _visible_job(problem, ready.job_id)
+        except KeyError:
+            continue
+        if job.release_time > state.current_time or state.is_job_completed(job.job_id):
+            continue
+        next_idx = state.next_op_index_for_job(job.job_id)
+        if next_idx >= job.num_operations:
+            continue
+        op = job.operation_at(next_idx)
+        if op.op_id != ready.op_id:
+            continue
+        if state.is_operation_completed(job.job_id, op.op_id):
+            continue
+        if state.is_operation_ongoing(job.job_id, op.op_id):
+            continue
+        try:
+            op.processing_time_on(ready.machine_id)
+        except KeyError:
+            continue
+        decisions.append((ready.job_id, ready.op_id, ready.machine_id, state.current_time))
+        assigned_ops.add(op_key)
+        assigned_machines.add(ready.machine_id)
     return decisions
 
 

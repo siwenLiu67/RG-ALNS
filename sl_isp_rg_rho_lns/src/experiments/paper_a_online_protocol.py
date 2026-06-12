@@ -634,6 +634,8 @@ def _run_one_algorithm(
         "max_A_size": _attr(wrapped.inner, "max_A_size", 0),
         "alns_runtime_total": _attr(wrapped.inner, "alns_runtime_total", 0.0),
         "dispatch_fallback_count": _attr(wrapped.inner, "dispatch_fallback_count", 0),
+        "local_extraction_success_count": _attr(wrapped.inner, "local_extraction_success_count", 0),
+        "affected_set_rescue_success_count": _attr(wrapped.inner, "affected_set_rescue_success_count", 0),
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
@@ -661,6 +663,8 @@ def _run_one_algorithm(
         **base,
         "fallback_reason": "summary",
         "dispatch_fallback_count": _attr(wrapped.inner, "dispatch_fallback_count", 0),
+        "local_extraction_success_count": _attr(wrapped.inner, "local_extraction_success_count", 0),
+        "affected_set_rescue_success_count": _attr(wrapped.inner, "affected_set_rescue_success_count", 0),
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
@@ -836,6 +840,8 @@ def _tuning_comparison_rows(
             "mean_trigger_ratio": _mean(mech, "trigger_ratio"),
             "mean_avg_A_size": _mean(mech, "avg_A_size"),
             "mean_dispatch_fallback_count": _mean(mech, "dispatch_fallback_count"),
+            "mean_local_extraction_success_count": _mean(mech, "local_extraction_success_count"),
+            "mean_affected_set_rescue_success_count": _mean(mech, "affected_set_rescue_success_count"),
             "mean_rescue_fallback_success_count": _mean(mech, "rescue_fallback_success_count"),
         })
     return rows
