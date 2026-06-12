@@ -472,5 +472,5 @@ e5a410e fix: stabilize RG-RALNS service-ready extraction
 Push status:
 
 ```text
-pending before push attempt
+pushed to origin/codex/rg-ralns-stage0-extraction-stabilization
 ```
