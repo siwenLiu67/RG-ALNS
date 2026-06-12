@@ -1108,11 +1108,11 @@ codex/paper-a-experiment-readiness-audit
 Commit hash:
 
 ```text
-pending at initial audit creation
+916927b docs: audit Paper A experiment readiness
 ```
 
 Push status:
 
 ```text
-pending at initial audit creation
+pending before push attempt
 ```
