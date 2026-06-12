@@ -639,6 +639,10 @@ def _run_one_algorithm(
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+        "mandatory_precursor_in_A_count": _attr(wrapped.inner, "mandatory_precursor_in_A_count", 0),
+        "cover_precursor_in_A_count": _attr(wrapped.inner, "cover_precursor_in_A_count", 0),
+        "mandatory_precursor_selected_count": _attr(wrapped.inner, "mandatory_precursor_selected_count", 0),
+        "cover_precursor_selected_count": _attr(wrapped.inner, "cover_precursor_selected_count", 0),
         "algorithm_call_count": algorithm_call_count,
         "number_of_events": number_of_events,
         "number_of_decision_events": wrapped.number_of_decision_events,
@@ -668,6 +672,10 @@ def _run_one_algorithm(
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+        "mandatory_precursor_in_A_count": _attr(wrapped.inner, "mandatory_precursor_in_A_count", 0),
+        "cover_precursor_in_A_count": _attr(wrapped.inner, "cover_precursor_in_A_count", 0),
+        "mandatory_precursor_selected_count": _attr(wrapped.inner, "mandatory_precursor_selected_count", 0),
+        "cover_precursor_selected_count": _attr(wrapped.inner, "cover_precursor_selected_count", 0),
     })
     return row, mechanism, trigger_rows, event_trace_rows, operator_rows, fallback_rows
 
@@ -766,6 +774,8 @@ def _rg_ralns_kwargs(config: dict[str, Any], seed: int) -> dict[str, Any]:
         "destroy_fraction_mid": cfg.get("destroy_fraction_mid", 0.35),
         "destroy_fraction_high": cfg.get("destroy_fraction_high", 0.50),
         "tt_polish_max_moves": cfg.get("tt_polish_max_moves", 0),
+        "recoverability_slack_margin": cfg.get("recoverability_slack_margin", 0.0),
+        "early_rescue_trigger": cfg.get("early_rescue_trigger", False),
         "debug_trace": cfg.get("debug_trace", False),
     }
 

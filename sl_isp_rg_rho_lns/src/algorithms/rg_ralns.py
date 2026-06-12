@@ -54,6 +54,8 @@ class RGRALNSConfig:
     destroy_fraction_mid: float = 0.35
     destroy_fraction_high: float = 0.50
     tt_polish_max_moves: int = 0
+    recoverability_slack_margin: float = 0.0
+    early_rescue_trigger: bool = False
     debug_trace: bool = False
 
     def __post_init__(self) -> None:
@@ -77,6 +79,8 @@ class RGRALNSConfig:
                 raise ValueError(f"{name} must be in (0, 1]")
         if self.tt_polish_max_moves < 0:
             raise ValueError("tt_polish_max_moves must be non-negative")
+        if self.recoverability_slack_margin < 0:
+            raise ValueError("recoverability_slack_margin must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -105,7 +109,12 @@ class EntityDiagnostics:
     recoverability_class: str = "stable"
     visible_recoverable_jobs: set[int] = field(default_factory=set)
     delivery_lb_by_job: dict[int, float] = field(default_factory=dict)
+    slack_lb_by_job: dict[int, float] = field(default_factory=dict)
     remaining_work_by_job: dict[int, float] = field(default_factory=dict)
+    min_slack_lb: float = math.inf
+    avg_slack_lb: float = 0.0
+    num_recoverable_with_slack_le_0: int = 0
+    num_recoverable_with_slack_le_threshold: int = 0
 
 
 @dataclass
@@ -203,6 +212,8 @@ def compute_recoverability_diagnostics(
     newly_arrived_job_ids: set[int] | None = None,
     *,
     eps: float = 1e-9,
+    recoverability_slack_margin: float = 0.0,
+    low_slack_threshold: float = 0.0,
 ) -> RGRALNSDiagnostics:
     """Compute the RG-RALNS recoverability diagnostics using J_vis(t) only."""
 
@@ -218,6 +229,7 @@ def compute_recoverability_diagnostics(
 
         visible_recoverable: set[int] = set()
         delivery_lb_by_job: dict[int, float] = {}
+        slack_lb_by_job: dict[int, float] = {}
         remaining_work_by_job: dict[int, float] = {}
         q_rec = 0.0
 
@@ -226,9 +238,11 @@ def compute_recoverability_diagnostics(
                 continue
             remaining_work = _remaining_job_work(job, state)
             delivery_lb = max(state.current_time, job.release_time) + remaining_work + entity.transport_delay
+            slack_lb = float(entity.deadline) - delivery_lb
             delivery_lb_by_job[job.job_id] = delivery_lb
+            slack_lb_by_job[job.job_id] = slack_lb
             remaining_work_by_job[job.job_id] = remaining_work
-            if delivery_lb <= entity.deadline + eps:
+            if delivery_lb + recoverability_slack_margin <= entity.deadline + eps:
                 visible_recoverable.add(job.job_id)
                 q_rec += float(job.quantity)
 
@@ -253,7 +267,26 @@ def compute_recoverability_diagnostics(
             mandatory_jobs=mandatory_jobs,
             visible_recoverable_jobs=visible_recoverable,
             delivery_lb_by_job=delivery_lb_by_job,
+            slack_lb_by_job=slack_lb_by_job,
             remaining_work_by_job=remaining_work_by_job,
+            min_slack_lb=min(
+                (slack_lb_by_job[job_id] for job_id in visible_recoverable),
+                default=math.inf,
+            ),
+            avg_slack_lb=(
+                sum(slack_lb_by_job[job_id] for job_id in visible_recoverable)
+                / len(visible_recoverable)
+                if visible_recoverable
+                else 0.0
+            ),
+            num_recoverable_with_slack_le_0=sum(
+                1 for job_id in visible_recoverable
+                if slack_lb_by_job[job_id] <= eps
+            ),
+            num_recoverable_with_slack_le_threshold=sum(
+                1 for job_id in visible_recoverable
+                if slack_lb_by_job[job_id] <= low_slack_threshold + eps
+            ),
         )
         provisional.cover_jobs = _heuristic_service_cover(problem, entity, provisional, eps)
         provisional.recoverability_class = _recoverability_class(problem, provisional, eps)
@@ -363,6 +396,22 @@ def _should_trigger_due_to_cover_violation(
     return False
 
 
+def _should_trigger_due_to_ready_rescue_precursor(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready_ops: list[ReadyOperation],
+) -> bool:
+    rescue_jobs = diagnostics.mandatory_jobs.union(diagnostics.cover_jobs)
+    for ready in ready_ops:
+        if ready.job_id not in rescue_jobs:
+            continue
+        job = _visible_job(problem, ready.job_id)
+        if _job_next_is_precursor(job, state):
+            return True
+    return False
+
+
 def lightweight_rg_dispatch(
     problem: SchedulingProblem,
     state: ScheduleState,
@@ -394,7 +443,7 @@ def lightweight_rg_dispatch(
         if not candidates:
             continue
         candidates.sort(
-            key=lambda item: _dispatch_priority(problem, diagnostics, item)
+            key=lambda item: _dispatch_priority(problem, state, diagnostics, item)
         )
         selected = candidates[0]
         decisions.append(
@@ -421,7 +470,7 @@ def _rescue_fallback_dispatch(
         ready = [item for item in ready if item.job_id in allowed_jobs]
     rescue_ready = [
         item for item in ready
-        if _service_rank(_visible_job(problem, item.job_id), diagnostics) <= 2
+        if _rescue_chain_rank(problem, state, diagnostics, item) <= 4
     ]
     if not rescue_ready:
         return []
@@ -445,7 +494,7 @@ def _rescue_fallback_dispatch(
         ]
         if not candidates:
             continue
-        candidates.sort(key=lambda item: _rescue_fallback_priority(problem, diagnostics, item))
+        candidates.sort(key=lambda item: _rescue_fallback_priority(problem, state, diagnostics, item))
         selected = candidates[0]
         decisions.append((selected.job_id, selected.op_id, selected.machine_id, state.current_time))
         assigned_ops.add((selected.job_id, selected.op_id))
@@ -456,15 +505,17 @@ def _rescue_fallback_dispatch(
 
 def _rescue_fallback_priority(
     problem: SchedulingProblem,
+    state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready: ReadyOperation,
-) -> tuple[int, int, int, float, int, int]:
+) -> tuple[int, int, int, float, int, int, int]:
     job = _visible_job(problem, ready.job_id)
     return (
         _service_rank(job, diagnostics),
         _effective_production_deadline(problem, job),
         ready.processing_time,
         -_marginal_service_quantity(job, diagnostics),
+        _rescue_chain_rank(problem, state, diagnostics, ready),
         job.job_id,
         ready.op_id,
     )
@@ -572,6 +623,10 @@ class RGRALNS:
         self.rescue_fallback_success_count = 0
         self.local_extraction_success_count = 0
         self.affected_set_rescue_success_count = 0
+        self.mandatory_precursor_in_A_count = 0
+        self.cover_precursor_in_A_count = 0
+        self.mandatory_precursor_selected_count = 0
+        self.cover_precursor_selected_count = 0
         self.fallback_failure_reason_counts: dict[str, int] = {}
         self.diagnostic_history: list[dict] = []
         self.event_trace_rows: list[dict] = []
@@ -664,6 +719,7 @@ class RGRALNS:
             state,
             newly_arrived,
             eps=self.config.eps,
+            recoverability_slack_margin=self.config.recoverability_slack_margin,
         )
         self.last_diagnostics = diagnostics
         self._record_diagnostics(state, diagnostics)
@@ -793,6 +849,10 @@ class RGRALNS:
             ),
             "cover_violation": _should_trigger_due_to_cover_violation(
                 problem, state, diagnostics, ready_ops
+            ),
+            "early_rescue_precursor": (
+                self.config.early_rescue_trigger
+                and _should_trigger_due_to_ready_rescue_precursor(problem, state, diagnostics, ready_ops)
             ),
         }
 
@@ -958,8 +1018,6 @@ class RGRALNS:
         ready_ops: list[ReadyOperation],
         decisions: list[tuple[int, int, int, int]],
     ) -> None:
-        if not self.config.debug_trace:
-            return
         first_decision = decisions[0] if decisions else None
         selected_job = _visible_job(problem, first_decision[0]) if first_decision else None
         selected_ready = None
@@ -973,6 +1031,24 @@ class RGRALNS:
                 ),
                 None,
             )
+        ready_job_ids = {ready.job_id for ready in ready_ops}
+        selected_job_ids = {job_id for job_id, _op_id, _machine_id, _start in decisions}
+        ready_mandatory_jobs = diagnostics.mandatory_jobs.intersection(ready_job_ids)
+        ready_cover_jobs = diagnostics.cover_jobs.intersection(ready_job_ids)
+        not_ready_mandatory_jobs = diagnostics.mandatory_jobs - ready_job_ids
+        not_ready_cover_jobs = diagnostics.cover_jobs - ready_job_ids
+        mandatory_precursor_jobs = _rescue_precursor_jobs(problem, state, diagnostics.mandatory_jobs)
+        cover_precursor_jobs = _rescue_precursor_jobs(problem, state, diagnostics.cover_jobs)
+        mandatory_precursors_in_A = mandatory_precursor_jobs.intersection(self.last_affected_set)
+        cover_precursors_in_A = cover_precursor_jobs.intersection(self.last_affected_set)
+        mandatory_precursors_selected = mandatory_precursor_jobs.intersection(selected_job_ids)
+        cover_precursors_selected = cover_precursor_jobs.intersection(selected_job_ids)
+        self.mandatory_precursor_in_A_count += len(mandatory_precursors_in_A)
+        self.cover_precursor_in_A_count += len(cover_precursors_in_A)
+        self.mandatory_precursor_selected_count += len(mandatory_precursors_selected)
+        self.cover_precursor_selected_count += len(cover_precursors_selected)
+        if not self.config.debug_trace:
+            return
         self.event_trace_rows.append({
             "event_index": len(self.event_trace_rows),
             "time": state.current_time,
@@ -980,28 +1056,58 @@ class RGRALNS:
             "algorithm_call_id": self._call_count,
             "triggered_alns": self.last_triggered,
             "trigger_reasons": _format_bool_reasons(self.last_trigger_reasons),
+            "entity_class_by_entity": ";".join(
+                f"{eid}:{diag.recoverability_class}"
+                for eid, diag in sorted(diagnostics.by_entity.items())
+            ),
             "U_info_by_entity": _format_entity_values({eid: diag.u_info for eid, diag in diagnostics.by_entity.items()}),
             "Q_rem_by_entity": _format_entity_values({eid: diag.q_rem for eid, diag in diagnostics.by_entity.items()}),
             "Q_rec_by_entity": _format_entity_values({eid: diag.q_rec for eid, diag in diagnostics.by_entity.items()}),
             "Q_future_by_entity": _format_entity_values({eid: diag.q_future for eid, diag in diagnostics.by_entity.items()}),
             "mandatory_jobs": _format_ints(diagnostics.mandatory_jobs),
             "cover_jobs": _format_ints(diagnostics.cover_jobs),
-            "ready_jobs": _format_ints({ready.job_id for ready in ready_ops}),
+            "ready_mandatory_jobs": _format_ints(ready_mandatory_jobs),
+            "ready_cover_jobs": _format_ints(ready_cover_jobs),
+            "not_ready_mandatory_jobs": _format_ints(not_ready_mandatory_jobs),
+            "not_ready_cover_jobs": _format_ints(not_ready_cover_jobs),
+            "mandatory_predecessor_ops": _format_next_ops(problem, state, mandatory_precursor_jobs),
+            "cover_predecessor_ops": _format_next_ops(problem, state, cover_precursor_jobs),
+            "whether_mandatory_predecessors_in_A": bool(mandatory_precursors_in_A),
+            "whether_cover_predecessors_in_A": bool(cover_precursors_in_A),
+            "whether_mandatory_predecessors_selected": bool(mandatory_precursors_selected),
+            "whether_cover_predecessors_selected": bool(cover_precursors_selected),
+            "ready_jobs": _format_ints(ready_job_ids),
             "A_size": len(self.last_affected_set),
             "A_jobs": _format_ints(self.last_affected_set),
+            "A_ready_jobs": _format_ints(self.last_affected_set.intersection(ready_job_ids)),
+            "A_precursor_jobs": _format_ints(_rescue_precursor_jobs(problem, state, self.last_affected_set)),
             "current_decisions": _format_decisions(decisions),
+            "selected_decisions": _format_decisions(decisions),
             "fallback_used": self.last_fallback_used,
             "fallback_reason": self.last_fallback_reason,
             "selected_job_entity": "" if selected_job is None else selected_job.entity_id,
             "selected_job_service_rank": "" if selected_job is None else _service_rank(selected_job, diagnostics),
+            "selected_job_rescue_chain_rank": "" if selected_ready is None else _rescue_chain_rank(problem, state, diagnostics, selected_ready),
             "selected_machine": "" if selected_ready is None else selected_ready.machine_id,
             "WSF_before_decision": _current_visible_wsf(problem, state),
+            "WSF_after_event_or_final_if_available": _current_visible_wsf(problem, state),
             "projected_WSF_after_local_plan": "" if self.last_best_eval is None else self.last_best_eval.wsf,
             "candidate_Z_N": "",
             "candidate_TT": "" if self.last_best_eval is None else self.last_best_eval.tt,
             "candidate_WSF": "" if self.last_best_eval is None else self.last_best_eval.wsf,
             "accepted": self.last_accepted,
             "acceptance_reason": self.last_acceptance_reason,
+            "min_slack_lb_by_entity": _format_entity_values({
+                eid: (0.0 if math.isinf(diag.min_slack_lb) else diag.min_slack_lb)
+                for eid, diag in diagnostics.by_entity.items()
+            }),
+            "avg_slack_lb_by_entity": _format_entity_values({
+                eid: diag.avg_slack_lb for eid, diag in diagnostics.by_entity.items()
+            }),
+            "low_slack_recoverable_by_entity": _format_entity_values({
+                eid: float(diag.num_recoverable_with_slack_le_threshold)
+                for eid, diag in diagnostics.by_entity.items()
+            }),
         })
 
     def _repair_rg_regret_k(
@@ -1012,7 +1118,6 @@ class RGRALNS:
         state: ScheduleState,
         diagnostics: RGRALNSDiagnostics,
     ) -> list[int]:
-        del state
         order = list(kept)
         remaining = list(removed)
         while remaining:
@@ -1120,9 +1225,10 @@ def _recoverability_class(
 
 def _dispatch_priority(
     problem: SchedulingProblem,
+    state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready: ReadyOperation,
-) -> tuple[int, int, int, float, float, int, int]:
+) -> tuple[int, int, int, float, float, int, int, int]:
     job = _visible_job(problem, ready.job_id)
     return (
         _service_rank(job, diagnostics),
@@ -1130,6 +1236,7 @@ def _dispatch_priority(
         ready.processing_time,
         -_marginal_service_quantity(job, diagnostics),
         _remaining_job_work_from_diag(job, diagnostics),
+        _rescue_chain_rank(problem, state, diagnostics, ready),
         job.job_id,
         ready.op_id,
     )
@@ -1146,6 +1253,45 @@ def _service_rank(job: Job, diagnostics: RGRALNSDiagnostics) -> int:
     return 3
 
 
+def _rescue_chain_rank(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready: ReadyOperation,
+) -> int:
+    """Priority class for the next executable operation of a rescue-relevant job."""
+
+    job = _visible_job(problem, ready.job_id)
+    next_idx = state.next_op_index_for_job(job.job_id)
+    precursor = next_idx < job.num_operations - 1
+    if job.job_id in diagnostics.mandatory_jobs:
+        return 1 if precursor else 0
+    entity_diag = diagnostics.by_entity[job.entity_id]
+    if entity_diag.recoverability_class != "secured" and job.job_id in entity_diag.cover_jobs:
+        return 3 if precursor else 2
+    if job.entity_id in diagnostics.high_risk_entities:
+        return 4
+    return 5
+
+
+def _job_rescue_chain_rank(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    job_id: int,
+) -> int:
+    job = _visible_job(problem, job_id)
+    precursor = _job_next_is_precursor(job, state)
+    if job_id in diagnostics.mandatory_jobs:
+        return 1 if precursor else 0
+    entity_diag = diagnostics.by_entity[job.entity_id]
+    if entity_diag.recoverability_class != "secured" and job_id in entity_diag.cover_jobs:
+        return 3 if precursor else 2
+    if job.entity_id in diagnostics.high_risk_entities:
+        return 4
+    return 5
+
+
 def _marginal_service_quantity(job: Job, diagnostics: RGRALNSDiagnostics) -> float:
     diag = diagnostics.by_entity[job.entity_id]
     if diag.q_rem <= 0.0:
@@ -1160,23 +1306,33 @@ def _affected_cap_priority(
     job_id: int,
     ready_jobs: set[int],
     bottleneck_competitors: set[int],
-) -> tuple[int, int, int, int, int, int, int, int, float, int]:
+) -> tuple[int, int, int, int, int, int, int, int, int, int, int, float, int]:
     job = _visible_job(problem, job_id)
     entity_id = job.entity_id
+    ready_mandatory = job_id in ready_jobs and job_id in diagnostics.mandatory_jobs
+    ready_mandatory_precursor = ready_mandatory and _job_next_is_precursor(job, state)
+    ready_cover = job_id in ready_jobs and job_id in diagnostics.cover_jobs
+    ready_cover_precursor = ready_cover and _job_next_is_precursor(job, state)
     new_high_risk = (
         job_id in diagnostics.newly_arrived_jobs
         and entity_id in diagnostics.high_risk_entities
     )
-    ready_high_risk = job_id in ready_jobs and entity_id in diagnostics.high_risk_entities
-    ready_mandatory = job_id in ready_jobs and job_id in diagnostics.mandatory_jobs
-    ready_cover = job_id in ready_jobs and job_id in diagnostics.cover_jobs
+    ready_fragile_or_arrival_dependent = (
+        job_id in ready_jobs
+        and diagnostics.by_entity[entity_id].recoverability_class
+        in {"fragile", "arrival_dependent"}
+    )
+    high_risk = entity_id in diagnostics.high_risk_entities
     return (
-        0 if ready_mandatory else 1,
+        0 if ready_mandatory and not ready_mandatory_precursor else 1,
+        0 if ready_mandatory_precursor else 1,
         0 if job_id in diagnostics.mandatory_jobs else 1,
-        0 if ready_cover else 1,
+        0 if ready_cover and not ready_cover_precursor else 1,
+        0 if ready_cover_precursor else 1,
         0 if job_id in diagnostics.cover_jobs else 1,
         0 if new_high_risk else 1,
-        0 if ready_high_risk else 1,
+        0 if ready_fragile_or_arrival_dependent else 1,
+        0 if high_risk else 1,
         0 if job_id in bottleneck_competitors else 1,
         _effective_production_deadline(problem, job),
         _remaining_job_work(job, state),
@@ -1523,9 +1679,9 @@ def _select_current_ready_decisions(
     assigned_ops: set[tuple[int, int]] = set()
     assigned_machines: set[int] = set()
 
-    def priority(ready: ReadyOperation) -> tuple[int, int, int, float, int, int]:
+    def priority(ready: ReadyOperation) -> tuple:
         if diagnostics is not None:
-            return _rescue_fallback_priority(problem, diagnostics, ready)
+            return _rescue_fallback_priority(problem, state, diagnostics, ready)
         job = _visible_job(problem, ready.job_id)
         return (
             3,
@@ -1717,7 +1873,6 @@ def _repair_mandatory_first(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
 ) -> list[int]:
-    del state
     return sorted(
         kept + removed,
         key=lambda job_id: (
@@ -1736,7 +1891,6 @@ def _repair_service_cover(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
 ) -> list[int]:
-    del state
     cover_jobs = diagnostics.cover_jobs
     all_jobs = _dedupe_order(list(cover_jobs) + kept + removed, set(kept + removed))
     return sorted(
@@ -1785,7 +1939,6 @@ def _repair_recoverability_gain(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
 ) -> list[int]:
-    del state
     return sorted(
         kept + removed,
         key=lambda job_id: (
@@ -1972,6 +2125,11 @@ def _job_has_ongoing_operation(job: Job, state: ScheduleState) -> bool:
     return any((job.job_id, op.op_id) in state.ongoing_operations for op in job.operations)
 
 
+def _job_next_is_precursor(job: Job, state: ScheduleState) -> bool:
+    next_idx = state.next_op_index_for_job(job.job_id)
+    return 0 <= next_idx < job.num_operations - 1
+
+
 def _next_ready_machines(
     problem: SchedulingProblem,
     state: ScheduleState,
@@ -1985,6 +2143,24 @@ def _next_ready_machines(
     if state.is_operation_completed(job_id, op.op_id) or state.is_operation_ongoing(job_id, op.op_id):
         return set()
     return set(op.eligible_machines)
+
+
+def _rescue_precursor_jobs(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    job_ids: set[int],
+) -> set[int]:
+    precursor_jobs: set[int] = set()
+    for job_id in job_ids:
+        try:
+            job = _visible_job(problem, job_id)
+        except KeyError:
+            continue
+        if state.is_job_completed(job_id) or _job_has_ongoing_operation(job, state):
+            continue
+        if _job_next_is_precursor(job, state):
+            precursor_jobs.add(job_id)
+    return precursor_jobs
 
 
 def _current_visible_wsf(problem: SchedulingProblem, state: ScheduleState) -> float:
@@ -2018,6 +2194,25 @@ def _format_decisions(decisions: list[tuple[int, int, int, int]]) -> str:
     return ";".join(f"{job}:{op}:{machine}:{start}" for job, op, machine, start in decisions)
 
 
+def _format_next_ops(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    job_ids: set[int],
+) -> str:
+    tokens: list[str] = []
+    for job_id in sorted(job_ids):
+        try:
+            job = _visible_job(problem, job_id)
+        except KeyError:
+            continue
+        next_idx = state.next_op_index_for_job(job_id)
+        if next_idx >= job.num_operations:
+            continue
+        op = job.operation_at(next_idx)
+        tokens.append(f"{job_id}:{op.op_id}")
+    return ";".join(tokens)
+
+
 __all__ = [
     "CandidateEvaluation",
     "EntityDiagnostics",
@@ -2033,11 +2228,13 @@ __all__ = [
     "run_lightweight_rg_dispatch",
     "run_rg_ralns",
     "_accept_candidate",
+    "_rescue_chain_rank",
     "_rescue_fallback_dispatch",
     "_repair_service_safe_edd_spt",
     "_should_trigger_due_to_bottleneck_competition",
     "_should_trigger_due_to_cover_violation",
     "_should_trigger_due_to_high_risk_arrival",
     "_should_trigger_due_to_mandatory_ready",
+    "_should_trigger_due_to_ready_rescue_precursor",
     "_should_trigger_due_to_shortfall",
 ]

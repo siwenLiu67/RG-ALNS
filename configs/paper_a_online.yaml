@@ -54,6 +54,8 @@ rg_ralns:
   destroy_fraction_mid: 0.35
   destroy_fraction_high: 0.50
   tt_polish_max_moves: 0
+  recoverability_slack_margin: 0.0
+  early_rescue_trigger: false
   regret_k: 2
   eps: 1.0e-9
   destroy_fraction: 0.35

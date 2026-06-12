@@ -14,6 +14,7 @@ from src.algorithms.rg_ralns import (
     _accept_candidate,
     _extract_current_feasible_operations,
     _rescue_fallback_dispatch,
+    _rescue_chain_rank,
     _repair_service_safe_edd_spt,
     _should_trigger_due_to_bottleneck_competition,
     _should_trigger_due_to_cover_violation,
@@ -60,6 +61,25 @@ def _job(
         release_time=release,
         quantity=quantity,
         operations=[_op(job_id, 0, *alts)],
+    )
+
+
+def _multi_op_job(
+    job_id: int,
+    entity_id: int,
+    release: int,
+    quantity: int,
+    op_alternatives: list[tuple[tuple[int, int], ...]],
+) -> Job:
+    return Job(
+        job_id=job_id,
+        entity_id=entity_id,
+        release_time=release,
+        quantity=quantity,
+        operations=[
+            _op(job_id, seq, *alts)
+            for seq, alts in enumerate(op_alternatives)
+        ],
     )
 
 
@@ -420,6 +440,93 @@ def test_ready_mandatory_job_cannot_be_excluded_by_affected_set_cap():
     affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=1)
 
     assert affected == {0}
+
+
+def test_ready_mandatory_precursor_stays_in_affected_set_and_gets_chain_priority():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    mandatory = _multi_op_job(0, 0, 0, 5, [((0, 2),), ((0, 2),)])
+    competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 5)]
+    view = _online_view([*competitors, mandatory], [service, low], [Machine(0)], future={0: 0, 1: 10})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=1)
+
+    assert affected == {0}
+    assert _rescue_chain_rank(view, state, diagnostics, ready_ops[0]) == 1
+
+
+def test_cover_precursor_priority_beats_low_risk_competitor():
+    service = ServiceEntity(0, deadline=30, rho=0.5, weight=1.0, total_quantity=10, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    cover = _multi_op_job(0, 0, 0, 1, [((0, 4),), ((0, 1),)])
+    other_visible = _job(2, 0, 0, 1, (0, 5))
+    low_spt = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view([low_spt, cover, other_visible], [service, low], [Machine(0)], future={0: 4, 1: 10})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    decisions = lightweight_rg_dispatch(view, state, diagnostics, ready_ops)
+
+    assert diagnostics.cover_jobs == {0}
+    assert decisions == [(0, 0, 0, 0)]
+    cover_ready = next(ready for ready in ready_ops if ready.job_id == 0)
+    assert _rescue_chain_rank(view, state, diagnostics, cover_ready) == 3
+
+
+def test_ready_mandatory_precursor_cannot_be_excluded_by_affected_set_cap():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    mandatory = _multi_op_job(0, 0, 0, 5, [((0, 2),), ((0, 2),)])
+    competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 8)]
+    view = _online_view([*competitors, mandatory], [service, low], [Machine(0)], future={0: 0, 1: 10})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=1)
+
+    assert affected == {0}
+
+
+def test_slack_diagnostic_identifies_risky_recoverable_jobs():
+    entity = ServiceEntity(0, deadline=5, rho=1.0, weight=1.0, total_quantity=1, transport_delay=0)
+    risky = _job(0, 0, 0, 1, (0, 5))
+    view = _online_view([risky], [entity], [Machine(0)], future={0: 0})
+    state = _state(machines=(0,))
+
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    entity_diag = diagnostics.by_entity[0]
+    conservative = compute_recoverability_diagnostics(
+        view,
+        state,
+        recoverability_slack_margin=1.0,
+    )
+
+    assert entity_diag.slack_lb_by_job[0] == 0
+    assert entity_diag.min_slack_lb == 0
+    assert entity_diag.avg_slack_lb == 0
+    assert entity_diag.num_recoverable_with_slack_le_0 == 1
+    assert conservative.by_entity[0].q_rec == 0
+
+
+def test_rescue_chain_logic_keeps_future_job_details_invisible():
+    entity = ServiceEntity(0, deadline=30, rho=1.0, weight=1.0, total_quantity=6, transport_delay=0)
+    visible = _multi_op_job(0, 0, 0, 3, [((0, 2),), ((0, 2),)])
+    hidden_future = _multi_op_job(99, 0, 10, 3, [((0, 1),), ((0, 1),)])
+    view = _online_view([visible], [entity], [Machine(0)], future={0: hidden_future.quantity})
+    state = _state(machines=(0,))
+
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+    affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=4)
+
+    assert 99 not in diagnostics.visible_job_ids
+    assert 99 not in diagnostics.by_entity[0].slack_lb_by_job
+    assert 99 not in affected
 
 
 def test_affected_set_rescue_dispatch_runs_before_ordinary_fallback():
