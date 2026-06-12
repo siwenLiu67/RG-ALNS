@@ -315,11 +315,11 @@ codex/rg-ralns-stage05-rescue-chain
 Commit after modification:
 
 ```text
-TBD
+f29c74c fix: add RG-RALNS rescue-chain readiness diagnostics
 ```
 
 Push status:
 
 ```text
-TBD
+pending at documentation update time
 ```
