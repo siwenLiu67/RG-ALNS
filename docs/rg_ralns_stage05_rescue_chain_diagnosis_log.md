@@ -316,10 +316,11 @@ Commit after modification:
 
 ```text
 f29c74c fix: add RG-RALNS rescue-chain readiness diagnostics
+4323f16 docs: record RG-RALNS stage05 rescue-chain metadata
 ```
 
 Push status:
 
 ```text
-pending at documentation update time
+succeeded; branch pushed to origin/codex/rg-ralns-stage05-rescue-chain
 ```
