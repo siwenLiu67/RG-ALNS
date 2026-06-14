@@ -22,7 +22,7 @@ codex/paper-a-stage1-expanded-small
 Commit after this report:
 
 ```text
-TBD
+95c187c docs: record Paper A Stage 1 expanded-small benchmark
 ```
 
 ## 3. Benchmark Settings
@@ -332,5 +332,5 @@ The goal should be to preserve the strong mean behavior while reducing seed-leve
 ## 17. Push Status
 
 ```text
-TBD
+pending at documentation update time
 ```
