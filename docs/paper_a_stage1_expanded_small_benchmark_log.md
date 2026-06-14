@@ -23,6 +23,7 @@ Commit after this report:
 
 ```text
 95c187c docs: record Paper A Stage 1 expanded-small benchmark
+93ee8da docs: record Stage 1 benchmark commit metadata
 ```
 
 ## 3. Benchmark Settings
@@ -332,5 +333,5 @@ The goal should be to preserve the strong mean behavior while reducing seed-leve
 ## 17. Push Status
 
 ```text
-pending at documentation update time
+succeeded; branch pushed to origin/codex/paper-a-stage1-expanded-small
 ```
