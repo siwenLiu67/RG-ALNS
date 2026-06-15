@@ -56,6 +56,10 @@ rg_ralns:
   tt_polish_max_moves: 0
   recoverability_slack_margin: 0.0
   early_rescue_trigger: false
+  capacity_rescue_enabled: true
+  rescue_reservation_window: 1
+  rescue_machine_pressure_threshold: 1
+  low_risk_on_rescue_machine_penalty: true
   regret_k: 2
   eps: 1.0e-9
   destroy_fraction: 0.35

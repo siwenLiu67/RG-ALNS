@@ -56,6 +56,10 @@ class RGRALNSConfig:
     tt_polish_max_moves: int = 0
     recoverability_slack_margin: float = 0.0
     early_rescue_trigger: bool = False
+    capacity_rescue_enabled: bool = True
+    rescue_reservation_window: int = 1
+    rescue_machine_pressure_threshold: int = 1
+    low_risk_on_rescue_machine_penalty: bool = True
     debug_trace: bool = False
 
     def __post_init__(self) -> None:
@@ -81,6 +85,10 @@ class RGRALNSConfig:
             raise ValueError("tt_polish_max_moves must be non-negative")
         if self.recoverability_slack_margin < 0:
             raise ValueError("recoverability_slack_margin must be non-negative")
+        if self.rescue_reservation_window < 0:
+            raise ValueError("rescue_reservation_window must be non-negative")
+        if self.rescue_machine_pressure_threshold < 0:
+            raise ValueError("rescue_machine_pressure_threshold must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -155,7 +163,14 @@ DestroyOperator = Callable[
     tuple[list[int], list[int]],
 ]
 RepairOperator = Callable[
-    [list[int], list[int], SchedulingProblem, ScheduleState, RGRALNSDiagnostics],
+    [
+        list[int],
+        list[int],
+        SchedulingProblem,
+        ScheduleState,
+        RGRALNSDiagnostics,
+        RGRALNSConfig | None,
+    ],
     list[int],
 ]
 
@@ -382,8 +397,9 @@ def _should_trigger_due_to_cover_violation(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready_ops: list[ReadyOperation],
+    config: RGRALNSConfig | None = None,
 ) -> bool:
-    decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+    decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops, config)
     selected_jobs = {job_id for job_id, _op_id, _machine_id, _start in decisions}
     ready_jobs = {ready.job_id for ready in ready_ops}
 
@@ -417,6 +433,7 @@ def lightweight_rg_dispatch(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready_ops: list[ReadyOperation] | None = None,
+    config: RGRALNSConfig | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """Deterministic lightweight RG dispatch for non-triggered events."""
 
@@ -443,7 +460,7 @@ def lightweight_rg_dispatch(
         if not candidates:
             continue
         candidates.sort(
-            key=lambda item: _dispatch_priority(problem, state, diagnostics, item)
+            key=lambda item: _dispatch_priority(problem, state, diagnostics, item, config)
         )
         selected = candidates[0]
         decisions.append(
@@ -462,6 +479,7 @@ def _rescue_fallback_dispatch(
     ready_ops: list[ReadyOperation] | None = None,
     *,
     allowed_jobs: set[int] | None = None,
+    config: RGRALNSConfig | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """Service-safe rescue dispatch used before ordinary fallback."""
 
@@ -494,7 +512,7 @@ def _rescue_fallback_dispatch(
         ]
         if not candidates:
             continue
-        candidates.sort(key=lambda item: _rescue_fallback_priority(problem, state, diagnostics, item))
+        candidates.sort(key=lambda item: _rescue_fallback_priority(problem, state, diagnostics, item, config))
         selected = candidates[0]
         decisions.append((selected.job_id, selected.op_id, selected.machine_id, state.current_time))
         assigned_ops.add((selected.job_id, selected.op_id))
@@ -508,7 +526,8 @@ def _rescue_fallback_priority(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready: ReadyOperation,
-) -> tuple[int, int, int, float, int, int, int]:
+    config: RGRALNSConfig | None = None,
+) -> tuple[int, int, int, float, int, float, int, int]:
     job = _visible_job(problem, ready.job_id)
     return (
         _service_rank(job, diagnostics),
@@ -516,6 +535,7 @@ def _rescue_fallback_priority(
         ready.processing_time,
         -_marginal_service_quantity(job, diagnostics),
         _rescue_chain_rank(problem, state, diagnostics, ready),
+        _capacity_rescue_penalty(problem, state, diagnostics, ready, config),
         job.job_id,
         ready.op_id,
     )
@@ -627,9 +647,12 @@ class RGRALNS:
         self.cover_precursor_in_A_count = 0
         self.mandatory_precursor_selected_count = 0
         self.cover_precursor_selected_count = 0
+        self.rescue_machine_contention_events = 0
+        self.rescue_machine_reservation_skip_count = 0
         self.fallback_failure_reason_counts: dict[str, int] = {}
         self.diagnostic_history: list[dict] = []
         self.event_trace_rows: list[dict] = []
+        self.rescue_machine_contention_rows: list[dict] = []
         self._call_count = 0
 
         self.last_triggered = False
@@ -732,7 +755,7 @@ class RGRALNS:
         if not should_run_alns:
             self.last_affected_set = set()
             self.last_local_job_order = []
-            decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+            decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops, self.config)
             self._record_event_trace(problem, state, diagnostics, ready_ops, decisions)
             return decisions
 
@@ -772,6 +795,7 @@ class RGRALNS:
             affected_set,
             diagnostics,
             ready_ops,
+            self.config,
         )
         if decisions:
             self.local_extraction_success_count += 1
@@ -799,6 +823,7 @@ class RGRALNS:
                 diagnostics,
                 ready_ops,
                 allowed_jobs=affected_set,
+                config=self.config,
             )
             if decisions:
                 self.affected_set_rescue_success_count += 1
@@ -809,7 +834,7 @@ class RGRALNS:
 
         if self.config.rescue_fallback_enabled:
             self.rescue_fallback_count += 1
-            decisions = _rescue_fallback_dispatch(problem, state, diagnostics, ready_ops)
+            decisions = _rescue_fallback_dispatch(problem, state, diagnostics, ready_ops, config=self.config)
             if decisions:
                 self.rescue_fallback_success_count += 1
                 self.last_fallback_reason = "rescue_fallback_success"
@@ -819,7 +844,7 @@ class RGRALNS:
                 self._count_fallback_failure("no_rescue_candidate_ready")
 
         self.ordinary_fallback_count += 1
-        decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops)
+        decisions = lightweight_rg_dispatch(problem, state, diagnostics, ready_ops, self.config)
         if decisions:
             self.last_fallback_reason = "ordinary_fallback_used"
             self._count_fallback_failure("ordinary_fallback_used")
@@ -848,7 +873,7 @@ class RGRALNS:
                 problem, state, diagnostics, ready_ops, self.config.bottleneck_trigger_mode
             ),
             "cover_violation": _should_trigger_due_to_cover_violation(
-                problem, state, diagnostics, ready_ops
+                problem, state, diagnostics, ready_ops, self.config
             ),
             "early_rescue_precursor": (
                 self.config.early_rescue_trigger
@@ -887,7 +912,7 @@ class RGRALNS:
         ready_ops: list[ReadyOperation],
         affected_set: set[int],
     ) -> LocalSchedule:
-        initial_order = _initial_local_order(problem, state, diagnostics, affected_set)
+        initial_order = _initial_local_order(problem, state, diagnostics, affected_set, self.config)
         incumbent = _decode_local_sequence(problem, state, initial_order)
         incumbent_eval = _evaluate_local_schedule(
             problem,
@@ -931,7 +956,14 @@ class RGRALNS:
                 ready_ops,
                 destroy_size,
             )
-            candidate_order = repair_ops[repair_name](kept, removed, problem, state, diagnostics)
+            candidate_order = repair_ops[repair_name](
+                kept,
+                removed,
+                problem,
+                state,
+                diagnostics,
+                self.config,
+            )
             candidate_order = _dedupe_order(candidate_order, affected_set)
             candidate_order = _tt_polish_order(
                 problem,
@@ -1047,6 +1079,50 @@ class RGRALNS:
         self.cover_precursor_in_A_count += len(cover_precursors_in_A)
         self.mandatory_precursor_selected_count += len(mandatory_precursors_selected)
         self.cover_precursor_selected_count += len(cover_precursors_selected)
+
+        pressure = _rescue_machine_pressure(
+            problem,
+            state,
+            diagnostics,
+            ready_ops,
+            reservation_window=self.config.rescue_reservation_window,
+        )
+        critical_machines = _rescue_critical_machines(
+            pressure,
+            threshold=self.config.rescue_machine_pressure_threshold,
+        )
+        rescue_ready_on_critical = [
+            ready
+            for ready in ready_ops
+            if ready.machine_id in critical_machines
+            and _rescue_chain_rank(problem, state, diagnostics, ready) <= 4
+        ]
+        low_risk_ready_on_critical = [
+            ready
+            for ready in ready_ops
+            if ready.machine_id in critical_machines
+            and _service_rank(_visible_job(problem, ready.job_id), diagnostics) >= 3
+        ]
+        has_contention = bool(low_risk_ready_on_critical)
+        if has_contention:
+            self.rescue_machine_contention_events += 1
+        if self.config.debug_trace and (critical_machines or low_risk_ready_on_critical):
+            self.rescue_machine_contention_rows.append({
+                "event_index": len(self.event_trace_rows),
+                "time": state.current_time,
+                "algorithm_call_id": self._call_count,
+                "triggered_alns": self.last_triggered,
+                "trigger_reasons": _format_bool_reasons(self.last_trigger_reasons),
+                "rescue_machine_pressure": _format_machine_values(pressure),
+                "rescue_critical_machines": _format_ints(critical_machines),
+                "rescue_ready_on_critical": _format_ready_ops(rescue_ready_on_critical),
+                "low_risk_ready_on_critical": _format_ready_ops(low_risk_ready_on_critical),
+                "selected_decisions": _format_decisions(decisions),
+                "fallback_reason": self.last_fallback_reason,
+                "A_jobs": _format_ints(self.last_affected_set),
+                "ready_jobs": _format_ints(ready_job_ids),
+                "has_contention": has_contention,
+            })
         if not self.config.debug_trace:
             return
         self.event_trace_rows.append({
@@ -1089,6 +1165,11 @@ class RGRALNS:
             "selected_job_service_rank": "" if selected_job is None else _service_rank(selected_job, diagnostics),
             "selected_job_rescue_chain_rank": "" if selected_ready is None else _rescue_chain_rank(problem, state, diagnostics, selected_ready),
             "selected_machine": "" if selected_ready is None else selected_ready.machine_id,
+            "rescue_machine_pressure": _format_machine_values(pressure),
+            "rescue_critical_machines": _format_ints(critical_machines),
+            "rescue_ready_on_critical": _format_ready_ops(rescue_ready_on_critical),
+            "low_risk_ready_on_critical": _format_ready_ops(low_risk_ready_on_critical),
+            "rescue_machine_contention": has_contention,
             "WSF_before_decision": _current_visible_wsf(problem, state),
             "WSF_after_event_or_final_if_available": _current_visible_wsf(problem, state),
             "projected_WSF_after_local_plan": "" if self.last_best_eval is None else self.last_best_eval.wsf,
@@ -1117,6 +1198,7 @@ class RGRALNS:
         problem: SchedulingProblem,
         state: ScheduleState,
         diagnostics: RGRALNSDiagnostics,
+        config: RGRALNSConfig | None = None,
     ) -> list[int]:
         order = list(kept)
         remaining = list(removed)
@@ -1124,7 +1206,7 @@ class RGRALNS:
             scored: list[tuple[float, tuple, int]] = []
             for job_id in remaining:
                 costs = [
-                    _insertion_cost(problem, diagnostics, job_id, pos)
+                    _insertion_cost(problem, state, diagnostics, job_id, pos, config)
                     for pos in range(len(order) + 1)
                 ]
                 costs.sort()
@@ -1136,7 +1218,7 @@ class RGRALNS:
             _neg_regret, _cost, selected = scored[0]
             best_pos = min(
                 range(len(order) + 1),
-                key=lambda pos: _insertion_cost(problem, diagnostics, selected, pos),
+                key=lambda pos: _insertion_cost(problem, state, diagnostics, selected, pos, config),
             )
             order.insert(best_pos, selected)
             remaining.remove(selected)
@@ -1228,11 +1310,13 @@ def _dispatch_priority(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     ready: ReadyOperation,
-) -> tuple[int, int, int, float, float, int, int, int]:
+    config: RGRALNSConfig | None = None,
+) -> tuple[int, int, float, int, float, float, int, int, int]:
     job = _visible_job(problem, ready.job_id)
     return (
         _service_rank(job, diagnostics),
         _effective_production_deadline(problem, job),
+        _capacity_rescue_penalty(problem, state, diagnostics, ready, config),
         ready.processing_time,
         -_marginal_service_quantity(job, diagnostics),
         _remaining_job_work_from_diag(job, diagnostics),
@@ -1290,6 +1374,166 @@ def _job_rescue_chain_rank(
     if job.entity_id in diagnostics.high_risk_entities:
         return 4
     return 5
+
+
+def _rescue_machine_pressure(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready_ops: list[ReadyOperation] | None = None,
+    *,
+    reservation_window: int = 1,
+) -> dict[int, int]:
+    """Count visible rescue-chain operations that need each machine soon."""
+
+    del ready_ops
+    pressure: dict[int, int] = {}
+    rescue_jobs = {
+        job.job_id
+        for job in problem.jobs
+        if (
+            job.job_id in diagnostics.mandatory_jobs
+            or job.job_id in diagnostics.cover_jobs
+            or diagnostics.by_entity[job.entity_id].recoverability_class in {"at_risk", "fragile"}
+        )
+    }
+    for job_id in sorted(rescue_jobs):
+        try:
+            job = _visible_job(problem, job_id)
+        except KeyError:
+            continue
+        if job.release_time > state.current_time or state.is_job_completed(job_id):
+            continue
+        op = _rescue_pressure_operation(job, state, reservation_window)
+        if op is None:
+            continue
+        for machine_id in op.eligible_machines:
+            pressure[machine_id] = pressure.get(machine_id, 0) + 1
+    return pressure
+
+
+def _rescue_critical_machines(
+    pressure: dict[int, int],
+    *,
+    threshold: int = 1,
+) -> set[int]:
+    return {machine_id for machine_id, value in pressure.items() if value >= threshold}
+
+
+def _capacity_rescue_active(
+    diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None,
+) -> bool:
+    if config is None or not config.capacity_rescue_enabled:
+        return False
+    return bool(diagnostics.mandatory_jobs) or any(
+        diag.u_info > config.eps or diag.recoverability_class in {"fragile", "at_risk"}
+        for diag in diagnostics.by_entity.values()
+    )
+
+
+def _capacity_rescue_penalty(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready: ReadyOperation,
+    config: RGRALNSConfig | None,
+) -> float:
+    if (
+        config is None
+        or not config.capacity_rescue_enabled
+        or not config.low_risk_on_rescue_machine_penalty
+        or not _capacity_rescue_active(diagnostics, config)
+    ):
+        return 0.0
+    job = _visible_job(problem, ready.job_id)
+    if _service_rank(job, diagnostics) < 3:
+        return 0.0
+    pressure = _rescue_machine_pressure(
+        problem,
+        state,
+        diagnostics,
+        reservation_window=config.rescue_reservation_window,
+    )
+    if pressure.get(ready.machine_id, 0) < config.rescue_machine_pressure_threshold:
+        return 0.0
+    return float(pressure[ready.machine_id])
+
+
+def _job_capacity_rescue_penalty(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    job_id: int,
+    config: RGRALNSConfig | None,
+) -> float:
+    if (
+        config is None
+        or not config.capacity_rescue_enabled
+        or not config.low_risk_on_rescue_machine_penalty
+        or not _capacity_rescue_active(diagnostics, config)
+    ):
+        return 0.0
+    try:
+        job = _visible_job(problem, job_id)
+    except KeyError:
+        return 0.0
+    if _service_rank(job, diagnostics) < 3:
+        return 0.0
+    next_idx = state.next_op_index_for_job(job_id)
+    if next_idx >= job.num_operations:
+        return 0.0
+    op = job.operation_at(next_idx)
+    if state.is_operation_completed(job_id, op.op_id) or state.is_operation_ongoing(job_id, op.op_id):
+        return 0.0
+    pressure = _rescue_machine_pressure(
+        problem,
+        state,
+        diagnostics,
+        reservation_window=config.rescue_reservation_window,
+    )
+    return float(
+        max(
+            (
+                pressure.get(machine_id, 0)
+                for machine_id in op.eligible_machines
+                if pressure.get(machine_id, 0) >= config.rescue_machine_pressure_threshold
+            ),
+            default=0,
+        )
+    )
+
+
+def _should_reserve_machine_for_rescue(
+    problem: SchedulingProblem,
+    state: ScheduleState,
+    diagnostics: RGRALNSDiagnostics,
+    ready_ops: list[ReadyOperation],
+    machine_candidates: list[ReadyOperation],
+    machine_id: int,
+    config: RGRALNSConfig | None,
+) -> bool:
+    if (
+        config is None
+        or not config.capacity_rescue_enabled
+        or not config.low_risk_on_rescue_machine_penalty
+        or not _capacity_rescue_active(diagnostics, config)
+    ):
+        return False
+    pressure = _rescue_machine_pressure(
+        problem,
+        state,
+        diagnostics,
+        ready_ops,
+        reservation_window=config.rescue_reservation_window,
+    )
+    if pressure.get(machine_id, 0) < config.rescue_machine_pressure_threshold:
+        return False
+    if any(_rescue_chain_rank(problem, state, diagnostics, ready) <= 4 for ready in machine_candidates):
+        return False
+    if not all(_service_rank(_visible_job(problem, ready.job_id), diagnostics) >= 3 for ready in machine_candidates):
+        return False
+    return any(_rescue_chain_rank(problem, state, diagnostics, ready) <= 4 for ready in ready_ops)
 
 
 def _marginal_service_quantity(job: Job, diagnostics: RGRALNSDiagnostics) -> float:
@@ -1413,14 +1657,17 @@ def _initial_local_order(
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     affected_set: set[int],
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
     return sorted(
         affected_set,
         key=lambda job_id: (
             _service_rank(_visible_job(problem, job_id), diagnostics),
+            _job_rescue_chain_rank(problem, state, diagnostics, job_id),
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
             _remaining_job_work(_visible_job(problem, job_id), state),
             -_marginal_service_quantity(_visible_job(problem, job_id), diagnostics),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         ),
     )
@@ -1624,6 +1871,7 @@ def _extract_current_feasible_operations(
     affected_set: set[int],
     diagnostics: RGRALNSDiagnostics | None = None,
     ready_ops: list[ReadyOperation] | None = None,
+    config: RGRALNSConfig | None = None,
 ) -> list[tuple[int, int, int, int]]:
     visible_job_ids = {job.job_id for job in problem.jobs}
     ready_by_key = {
@@ -1666,7 +1914,7 @@ def _extract_current_feasible_operations(
             ),
         )
 
-    return _select_current_ready_decisions(problem, state, list(candidates.values()), diagnostics)
+    return _select_current_ready_decisions(problem, state, list(candidates.values()), diagnostics, config)
 
 
 def _select_current_ready_decisions(
@@ -1674,6 +1922,7 @@ def _select_current_ready_decisions(
     state: ScheduleState,
     ready_ops: list[ReadyOperation],
     diagnostics: RGRALNSDiagnostics | None,
+    config: RGRALNSConfig | None = None,
 ) -> list[tuple[int, int, int, int]]:
     decisions: list[tuple[int, int, int, int]] = []
     assigned_ops: set[tuple[int, int]] = set()
@@ -1681,7 +1930,7 @@ def _select_current_ready_decisions(
 
     def priority(ready: ReadyOperation) -> tuple:
         if diagnostics is not None:
-            return _rescue_fallback_priority(problem, state, diagnostics, ready)
+            return _rescue_fallback_priority(problem, state, diagnostics, ready, config)
         job = _visible_job(problem, ready.job_id)
         return (
             3,
@@ -1872,13 +2121,16 @@ def _repair_mandatory_first(
     problem: SchedulingProblem,
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
     return sorted(
         kept + removed,
         key=lambda job_id: (
             _service_rank(_visible_job(problem, job_id), diagnostics),
+            _job_rescue_chain_rank(problem, state, diagnostics, job_id),
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
             _remaining_job_work_from_diag(_visible_job(problem, job_id), diagnostics),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         ),
     )
@@ -1890,6 +2142,7 @@ def _repair_service_cover(
     problem: SchedulingProblem,
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
     cover_jobs = diagnostics.cover_jobs
     all_jobs = _dedupe_order(list(cover_jobs) + kept + removed, set(kept + removed))
@@ -1898,7 +2151,9 @@ def _repair_service_cover(
         key=lambda job_id: (
             0 if job_id in cover_jobs else 1,
             _service_rank(_visible_job(problem, job_id), diagnostics),
+            _job_rescue_chain_rank(problem, state, diagnostics, job_id),
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         ),
     )
@@ -1910,6 +2165,7 @@ def _repair_service_safe_edd_spt(
     problem: SchedulingProblem,
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
     all_jobs = _dedupe_order(kept + removed, set(kept + removed))
     service_critical = [
@@ -1921,13 +2177,18 @@ def _repair_service_safe_edd_spt(
     service_critical.sort(
         key=lambda job_id: (
             _service_rank(_visible_job(problem, job_id), diagnostics),
+            _job_rescue_chain_rank(problem, state, diagnostics, job_id),
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
             _remaining_job_work(_visible_job(problem, job_id), state),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         )
     )
     remaining.sort(
-        key=lambda job_id: _tt_oriented_insertion_key(problem, state, job_id)
+        key=lambda job_id: (
+            _tt_oriented_insertion_key(problem, state, job_id),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
+        )
     )
     return service_critical + remaining
 
@@ -1938,13 +2199,16 @@ def _repair_recoverability_gain(
     problem: SchedulingProblem,
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
     return sorted(
         kept + removed,
         key=lambda job_id: (
             -_recoverability_gain(problem, diagnostics, job_id),
             _service_rank(_visible_job(problem, job_id), diagnostics),
+            _job_rescue_chain_rank(problem, state, diagnostics, job_id),
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         ),
     )
@@ -1956,13 +2220,14 @@ def _repair_edd_spt(
     problem: SchedulingProblem,
     state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
+    config: RGRALNSConfig | None = None,
 ) -> list[int]:
-    del diagnostics
     return sorted(
         kept + removed,
         key=lambda job_id: (
             _effective_production_deadline(problem, _visible_job(problem, job_id)),
             _remaining_job_work(_visible_job(problem, job_id), state),
+            _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
             job_id,
         ),
     )
@@ -2049,21 +2314,32 @@ def _dedupe_order(order: list[int], allowed: set[int]) -> list[int]:
 
 def _insertion_cost(
     problem: SchedulingProblem,
+    state: ScheduleState,
     diagnostics: RGRALNSDiagnostics,
     job_id: int,
     position: int,
-) -> tuple[int, int, float, int]:
+    config: RGRALNSConfig | None,
+) -> tuple[int, int, int, float, float, int]:
     job = _visible_job(problem, job_id)
     return (
         _service_rank(job, diagnostics),
+        _job_rescue_chain_rank(problem, state, diagnostics, job_id),
         position,
         _remaining_job_work_from_diag(job, diagnostics),
+        _job_capacity_rescue_penalty(problem, state, diagnostics, job_id, config),
         job_id,
     )
 
 
-def _tuple_cost_value(cost: tuple[int, int, float, int]) -> float:
-    return cost[0] * 1_000_000.0 + cost[1] * 1_000.0 + cost[2] + cost[3] * 1e-6
+def _tuple_cost_value(cost: tuple[int, int, int, float, float, int]) -> float:
+    return (
+        cost[0] * 1_000_000.0
+        + cost[1] * 100_000.0
+        + cost[2] * 10_000.0
+        + cost[3] * 1_000.0
+        + cost[4]
+        + cost[5] * 1e-6
+    )
 
 
 def _order_instability(order: list[int], reference_order: list[int]) -> float:
@@ -2130,6 +2406,34 @@ def _job_next_is_precursor(job: Job, state: ScheduleState) -> bool:
     return 0 <= next_idx < job.num_operations - 1
 
 
+def _rescue_pressure_operation(
+    job: Job,
+    state: ScheduleState,
+    reservation_window: int,
+) -> Operation | None:
+    if _job_has_ongoing_operation(job, state):
+        for op in job.operations:
+            ongoing = state.ongoing_operations.get((job.job_id, op.op_id))
+            if ongoing is None:
+                continue
+            if ongoing.end_time > state.current_time + reservation_window:
+                return None
+            next_idx = op.sequence_index + 1
+            if next_idx >= job.num_operations:
+                return None
+            return job.operation_at(next_idx)
+
+    next_idx = state.next_op_index_for_job(job.job_id)
+    if next_idx >= job.num_operations:
+        return None
+    op = job.operation_at(next_idx)
+    if state.is_operation_completed(job.job_id, op.op_id):
+        return None
+    if state.is_operation_ongoing(job.job_id, op.op_id):
+        return None
+    return op
+
+
 def _next_ready_machines(
     problem: SchedulingProblem,
     state: ScheduleState,
@@ -2190,6 +2494,17 @@ def _format_entity_values(values: dict[int, float]) -> str:
     return ";".join(f"{entity_id}:{value:.6g}" for entity_id, value in sorted(values.items()))
 
 
+def _format_machine_values(values: dict[int, int]) -> str:
+    return ";".join(f"{machine_id}:{value}" for machine_id, value in sorted(values.items()))
+
+
+def _format_ready_ops(values: list[ReadyOperation]) -> str:
+    return ";".join(
+        f"{ready.job_id}:{ready.op_id}:{ready.machine_id}:{ready.processing_time}"
+        for ready in sorted(values, key=lambda item: (item.machine_id, item.job_id, item.op_id))
+    )
+
+
 def _format_decisions(decisions: list[tuple[int, int, int, int]]) -> str:
     return ";".join(f"{job}:{op}:{machine}:{start}" for job, op, machine, start in decisions)
 
@@ -2229,7 +2544,9 @@ __all__ = [
     "run_rg_ralns",
     "_accept_candidate",
     "_rescue_chain_rank",
+    "_rescue_critical_machines",
     "_rescue_fallback_dispatch",
+    "_rescue_machine_pressure",
     "_repair_service_safe_edd_spt",
     "_should_trigger_due_to_bottleneck_competition",
     "_should_trigger_due_to_cover_violation",

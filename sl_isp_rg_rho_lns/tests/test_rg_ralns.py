@@ -15,6 +15,8 @@ from src.algorithms.rg_ralns import (
     _extract_current_feasible_operations,
     _rescue_fallback_dispatch,
     _rescue_chain_rank,
+    _rescue_critical_machines,
+    _rescue_machine_pressure,
     _repair_service_safe_edd_spt,
     _should_trigger_due_to_bottleneck_competition,
     _should_trigger_due_to_cover_violation,
@@ -429,7 +431,7 @@ def test_local_extraction_skips_non_rescue_prefix_and_selects_ready_mandatory():
 
 def test_ready_mandatory_job_cannot_be_excluded_by_affected_set_cap():
     high = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
-    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
     mandatory = _job(0, 0, 0, 5, (0, 8))
     competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 5)]
     view = _online_view([*competitors, mandatory], [high, low], [Machine(0)], future={0: 0, 1: 10})
@@ -444,7 +446,7 @@ def test_ready_mandatory_job_cannot_be_excluded_by_affected_set_cap():
 
 def test_ready_mandatory_precursor_stays_in_affected_set_and_gets_chain_priority():
     service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
-    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
     mandatory = _multi_op_job(0, 0, 0, 5, [((0, 2),), ((0, 2),)])
     competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 5)]
     view = _online_view([*competitors, mandatory], [service, low], [Machine(0)], future={0: 0, 1: 10})
@@ -460,7 +462,7 @@ def test_ready_mandatory_precursor_stays_in_affected_set_and_gets_chain_priority
 
 def test_cover_precursor_priority_beats_low_risk_competitor():
     service = ServiceEntity(0, deadline=30, rho=0.5, weight=1.0, total_quantity=10, transport_delay=0)
-    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
     cover = _multi_op_job(0, 0, 0, 1, [((0, 4),), ((0, 1),)])
     other_visible = _job(2, 0, 0, 1, (0, 5))
     low_spt = _job(1, 1, 0, 1, (0, 1))
@@ -479,7 +481,7 @@ def test_cover_precursor_priority_beats_low_risk_competitor():
 
 def test_ready_mandatory_precursor_cannot_be_excluded_by_affected_set_cap():
     service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
-    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
     mandatory = _multi_op_job(0, 0, 0, 5, [((0, 2),), ((0, 2),)])
     competitors = [_job(job_id, 1, 0, 1, (0, 1)) for job_id in range(1, 8)]
     view = _online_view([*competitors, mandatory], [service, low], [Machine(0)], future={0: 0, 1: 10})
@@ -527,6 +529,123 @@ def test_rescue_chain_logic_keeps_future_job_details_invisible():
     assert 99 not in diagnostics.visible_job_ids
     assert 99 not in diagnostics.by_entity[0].slack_lb_by_job
     assert 99 not in affected
+
+
+def test_rescue_critical_machine_pressure_detects_near_ready_chain():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=10, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
+    near_ready_rescue = _multi_op_job(0, 0, 0, 5, [((1, 1),), ((0, 2),)])
+    ready_rescue = _job(2, 0, 0, 5, (0, 2))
+    low_competitor = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view(
+        [near_ready_rescue, low_competitor, ready_rescue],
+        [service, low],
+        [Machine(0), Machine(1)],
+        future={0: 0, 1: 10},
+    )
+    state = _state(machines=(0, 1))
+    state.ongoing_operations[(0, 0)] = ScheduledOperation(0, 0, 1, 0, 1)
+    state.machine_available_times[1] = 1
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    pressure = _rescue_machine_pressure(
+        view,
+        state,
+        diagnostics,
+        ready_ops,
+        reservation_window=1,
+    )
+    critical = _rescue_critical_machines(pressure, threshold=1)
+
+    assert pressure[0] > 0
+    assert 0 in critical
+
+
+def test_capacity_rescue_delays_low_risk_competitor_on_rescue_machine():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=10, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
+    near_ready_rescue = _multi_op_job(0, 0, 0, 5, [((1, 1),), ((0, 2),)])
+    ready_rescue = _job(2, 0, 0, 5, (0, 2))
+    low_competitor = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view(
+        [near_ready_rescue, low_competitor, ready_rescue],
+        [service, low],
+        [Machine(0), Machine(1)],
+        future={0: 0, 1: 10},
+    )
+    state = _state(machines=(0, 1))
+    state.ongoing_operations[(0, 0)] = ScheduledOperation(0, 0, 1, 0, 1)
+    state.machine_available_times[1] = 1
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    decisions = lightweight_rg_dispatch(
+        view,
+        state,
+        diagnostics,
+        ready_ops,
+        config=RGRALNSConfig(capacity_rescue_enabled=True, rescue_reservation_window=1),
+    )
+
+    assert (2, 20, 0, 0) in decisions
+    assert all(job_id != 1 for job_id, _op_id, _machine_id, _start in decisions)
+
+
+def test_capacity_rescue_does_not_idle_machine_without_executable_rescue():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.2, weight=1.0, total_quantity=20, transport_delay=0)
+    near_ready_rescue = _multi_op_job(0, 0, 0, 5, [((1, 1),), ((0, 2),)])
+    low_competitor = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view(
+        [near_ready_rescue, low_competitor],
+        [service, low],
+        [Machine(0), Machine(1)],
+        future={0: 0, 1: 10},
+    )
+    state = _state(machines=(0, 1))
+    state.ongoing_operations[(0, 0)] = ScheduledOperation(0, 0, 1, 0, 1)
+    state.machine_available_times[1] = 1
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    decisions = lightweight_rg_dispatch(
+        view,
+        state,
+        diagnostics,
+        ready_ops,
+        config=RGRALNSConfig(capacity_rescue_enabled=True, rescue_reservation_window=1),
+    )
+
+    assert decisions == [(1, 10, 0, 0)]
+
+
+def test_capacity_rescue_pressure_uses_only_visible_jobs():
+    entity = ServiceEntity(0, deadline=30, rho=1.0, weight=1.0, total_quantity=6, transport_delay=0)
+    visible = _job(0, 0, 0, 3, (0, 3))
+    hidden_future = _multi_op_job(99, 0, 10, 3, [((1, 1),), ((2, 1),)])
+    view = _online_view([visible], [entity], [Machine(0), Machine(1), Machine(2)], future={0: hidden_future.quantity})
+    state = _state(machines=(0, 1, 2))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    pressure = _rescue_machine_pressure(view, state, diagnostics, ready_ops, reservation_window=1)
+
+    assert 99 not in diagnostics.visible_job_ids
+    assert 2 not in pressure
+
+
+def test_capacity_rescue_keeps_affected_set_capped():
+    entity = ServiceEntity(0, deadline=30, rho=1.0, weight=1.0, total_quantity=20, transport_delay=0)
+    jobs = [_job(job_id, 0, 0, 2, (0, 1)) for job_id in range(10)]
+    view = _online_view(jobs, [entity], [Machine(0)], future={0: 0})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready_ops = collect_ready_operations(view, state)
+
+    affected = construct_affected_set(view, state, diagnostics, ready_ops, H_A=4)
+
+    assert len(affected) <= 4
 
 
 def test_affected_set_rescue_dispatch_runs_before_ordinary_fallback():

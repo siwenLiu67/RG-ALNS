@@ -412,6 +412,8 @@ def run_paper_a_online_benchmark(
     event_trace_rows: list[dict[str, Any]] = []
     operator_rows: list[dict[str, Any]] = []
     fallback_rows: list[dict[str, Any]] = []
+    rescue_failure_rows: list[dict[str, Any]] = []
+    rescue_machine_contention_rows: list[dict[str, Any]] = []
 
     for instance_key, instance_cfg in config.get("instances", {}).items():
         num_instances = int(instance_cfg.get("num_instances", 1))
@@ -430,7 +432,16 @@ def run_paper_a_online_benchmark(
                     calibration,
                 ))
                 for spec in specs:
-                    row, mechanism, trigger_counts, event_trace, operator_stats, fallback_stats = _run_one_algorithm(
+                    (
+                        row,
+                        mechanism,
+                        trigger_counts,
+                        event_trace,
+                        operator_stats,
+                        fallback_stats,
+                        rescue_failure,
+                        rescue_machine_contention,
+                    ) = _run_one_algorithm(
                         instance=instance,
                         instance_key=instance_key,
                         instance_index=instance_index,
@@ -445,6 +456,8 @@ def run_paper_a_online_benchmark(
                     event_trace_rows.extend(event_trace)
                     operator_rows.extend(operator_stats)
                     fallback_rows.extend(fallback_stats)
+                    rescue_failure_rows.extend(rescue_failure)
+                    rescue_machine_contention_rows.extend(rescue_machine_contention)
 
     summary_rows = _summarize_results(per_instance_rows)
     sensitivity_rows = _summarize_beta_sensitivity(
@@ -463,6 +476,8 @@ def run_paper_a_online_benchmark(
         "rg_ralns_event_trace_seed2_csv": str(output_dir / "rg_ralns_event_trace_seed2.csv"),
         "operator_stats_csv": str(output_dir / "operator_stats.csv"),
         "fallback_stats_csv": str(output_dir / "fallback_stats.csv"),
+        "rescue_failure_summary_csv": str(output_dir / "rescue_failure_summary.csv"),
+        "rescue_machine_contention_trace_csv": str(output_dir / "rescue_machine_contention_trace.csv"),
         "tuning_comparison_csv": str(output_dir / "tuning_comparison.csv"),
         "config_used_yaml": str(output_dir / "config_used.yaml"),
     }
@@ -474,6 +489,8 @@ def run_paper_a_online_benchmark(
     _write_csv(Path(outputs["rg_ralns_event_trace_seed2_csv"]), event_trace_rows)
     _write_csv(Path(outputs["operator_stats_csv"]), operator_rows)
     _write_csv(Path(outputs["fallback_stats_csv"]), fallback_rows)
+    _write_csv(Path(outputs["rescue_failure_summary_csv"]), rescue_failure_rows)
+    _write_csv(Path(outputs["rescue_machine_contention_trace_csv"]), rescue_machine_contention_rows)
     _write_csv(
         Path(outputs["tuning_comparison_csv"]),
         _tuning_comparison_rows(summary_rows, mechanism_rows, beta_0=objective_cfg["beta_0"]),
@@ -639,6 +656,8 @@ def _run_one_algorithm(
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+        "rescue_machine_contention_events": _attr(wrapped.inner, "rescue_machine_contention_events", 0),
+        "rescue_machine_reservation_skip_count": _attr(wrapped.inner, "rescue_machine_reservation_skip_count", 0),
         "mandatory_precursor_in_A_count": _attr(wrapped.inner, "mandatory_precursor_in_A_count", 0),
         "cover_precursor_in_A_count": _attr(wrapped.inner, "cover_precursor_in_A_count", 0),
         "mandatory_precursor_selected_count": _attr(wrapped.inner, "mandatory_precursor_selected_count", 0),
@@ -672,12 +691,46 @@ def _run_one_algorithm(
         "rescue_fallback_count": _attr(wrapped.inner, "rescue_fallback_count", 0),
         "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
         "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+        "rescue_machine_contention_events": _attr(wrapped.inner, "rescue_machine_contention_events", 0),
+        "rescue_machine_reservation_skip_count": _attr(wrapped.inner, "rescue_machine_reservation_skip_count", 0),
         "mandatory_precursor_in_A_count": _attr(wrapped.inner, "mandatory_precursor_in_A_count", 0),
         "cover_precursor_in_A_count": _attr(wrapped.inner, "cover_precursor_in_A_count", 0),
         "mandatory_precursor_selected_count": _attr(wrapped.inner, "mandatory_precursor_selected_count", 0),
         "cover_precursor_selected_count": _attr(wrapped.inner, "cover_precursor_selected_count", 0),
     })
-    return row, mechanism, trigger_rows, event_trace_rows, operator_rows, fallback_rows
+    rescue_failure_rows = [{
+        **base,
+        "final_WSF": "" if obj is None else obj.weighted_service_shortfall,
+        "final_ZSR": "" if obj is None else obj.zero_shortfall_entity_rate,
+        "no_ready_operation_available_count": dict(_attr(wrapped.inner, "fallback_failure_reason_counts", {})).get(
+            "no_ready_operation_available",
+            0,
+        ),
+        "ordinary_fallback_count": _attr(wrapped.inner, "ordinary_fallback_count", 0),
+        "rescue_fallback_success_count": _attr(wrapped.inner, "rescue_fallback_success_count", 0),
+        "affected_set_rescue_success_count": _attr(wrapped.inner, "affected_set_rescue_success_count", 0),
+        "rescue_machine_contention_events": _attr(wrapped.inner, "rescue_machine_contention_events", 0),
+        "mandatory_precursor_in_A_count": _attr(wrapped.inner, "mandatory_precursor_in_A_count", 0),
+        "cover_precursor_in_A_count": _attr(wrapped.inner, "cover_precursor_in_A_count", 0),
+        "mandatory_precursor_selected_count": _attr(wrapped.inner, "mandatory_precursor_selected_count", 0),
+        "cover_precursor_selected_count": _attr(wrapped.inner, "cover_precursor_selected_count", 0),
+        "failed_entity": "",
+        "final_shortfall": "" if obj is None else obj.weighted_service_shortfall,
+    }]
+    rescue_machine_contention_rows = [
+        {**base, **trace_row}
+        for trace_row in list(_attr(wrapped.inner, "rescue_machine_contention_rows", []))
+    ]
+    return (
+        row,
+        mechanism,
+        trigger_rows,
+        event_trace_rows,
+        operator_rows,
+        fallback_rows,
+        rescue_failure_rows,
+        rescue_machine_contention_rows,
+    )
 
 
 def _select_algorithm_specs(config: dict[str, Any]) -> list[PaperAAlgorithmSpec]:
@@ -776,6 +829,10 @@ def _rg_ralns_kwargs(config: dict[str, Any], seed: int) -> dict[str, Any]:
         "tt_polish_max_moves": cfg.get("tt_polish_max_moves", 0),
         "recoverability_slack_margin": cfg.get("recoverability_slack_margin", 0.0),
         "early_rescue_trigger": cfg.get("early_rescue_trigger", False),
+        "capacity_rescue_enabled": cfg.get("capacity_rescue_enabled", True),
+        "rescue_reservation_window": cfg.get("rescue_reservation_window", 1),
+        "rescue_machine_pressure_threshold": cfg.get("rescue_machine_pressure_threshold", 1),
+        "low_risk_on_rescue_machine_penalty": cfg.get("low_risk_on_rescue_machine_penalty", True),
         "debug_trace": cfg.get("debug_trace", False),
     }
 

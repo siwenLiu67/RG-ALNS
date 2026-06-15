@@ -183,11 +183,13 @@ def test_runner_writes_main_online_and_offline_outputs(tmp_path: Path):
         "objective_calibration_csv",
         "beta_sensitivity_summary_csv",
         "rg_ralns_event_trace_seed2_csv",
-        "operator_stats_csv",
-        "fallback_stats_csv",
-        "tuning_comparison_csv",
-        "config_used_yaml",
-    }
+            "operator_stats_csv",
+            "fallback_stats_csv",
+            "rescue_failure_summary_csv",
+            "rescue_machine_contention_trace_csv",
+            "tuning_comparison_csv",
+            "config_used_yaml",
+        }
     assert set(result["outputs"]) == expected_files
     for output_path in result["outputs"].values():
         assert Path(output_path).exists()
