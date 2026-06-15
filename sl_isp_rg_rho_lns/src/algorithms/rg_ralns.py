@@ -56,7 +56,7 @@ class RGRALNSConfig:
     tt_polish_max_moves: int = 0
     recoverability_slack_margin: float = 0.0
     early_rescue_trigger: bool = False
-    capacity_rescue_enabled: bool = True
+    capacity_rescue_enabled: bool = False
     rescue_reservation_window: int = 1
     rescue_machine_pressure_threshold: int = 1
     low_risk_on_rescue_machine_penalty: bool = True
@@ -1659,6 +1659,17 @@ def _initial_local_order(
     affected_set: set[int],
     config: RGRALNSConfig | None = None,
 ) -> list[int]:
+    if config is None or not config.capacity_rescue_enabled:
+        return sorted(
+            affected_set,
+            key=lambda job_id: (
+                _service_rank(_visible_job(problem, job_id), diagnostics),
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                _remaining_job_work(_visible_job(problem, job_id), state),
+                -_marginal_service_quantity(_visible_job(problem, job_id), diagnostics),
+                job_id,
+            ),
+        )
     return sorted(
         affected_set,
         key=lambda job_id: (
@@ -2123,6 +2134,16 @@ def _repair_mandatory_first(
     diagnostics: RGRALNSDiagnostics,
     config: RGRALNSConfig | None = None,
 ) -> list[int]:
+    if config is None or not config.capacity_rescue_enabled:
+        return sorted(
+            kept + removed,
+            key=lambda job_id: (
+                _service_rank(_visible_job(problem, job_id), diagnostics),
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                _remaining_job_work_from_diag(_visible_job(problem, job_id), diagnostics),
+                job_id,
+            ),
+        )
     return sorted(
         kept + removed,
         key=lambda job_id: (
@@ -2146,6 +2167,16 @@ def _repair_service_cover(
 ) -> list[int]:
     cover_jobs = diagnostics.cover_jobs
     all_jobs = _dedupe_order(list(cover_jobs) + kept + removed, set(kept + removed))
+    if config is None or not config.capacity_rescue_enabled:
+        return sorted(
+            all_jobs,
+            key=lambda job_id: (
+                0 if job_id in cover_jobs else 1,
+                _service_rank(_visible_job(problem, job_id), diagnostics),
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                job_id,
+            ),
+        )
     return sorted(
         all_jobs,
         key=lambda job_id: (
@@ -2174,6 +2205,19 @@ def _repair_service_safe_edd_spt(
         if job_id in diagnostics.mandatory_jobs or job_id in diagnostics.cover_jobs
     ]
     remaining = [job_id for job_id in all_jobs if job_id not in set(service_critical)]
+    if config is None or not config.capacity_rescue_enabled:
+        service_critical.sort(
+            key=lambda job_id: (
+                _service_rank(_visible_job(problem, job_id), diagnostics),
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                _remaining_job_work(_visible_job(problem, job_id), state),
+                job_id,
+            )
+        )
+        remaining.sort(
+            key=lambda job_id: _tt_oriented_insertion_key(problem, state, job_id)
+        )
+        return service_critical + remaining
     service_critical.sort(
         key=lambda job_id: (
             _service_rank(_visible_job(problem, job_id), diagnostics),
@@ -2201,6 +2245,16 @@ def _repair_recoverability_gain(
     diagnostics: RGRALNSDiagnostics,
     config: RGRALNSConfig | None = None,
 ) -> list[int]:
+    if config is None or not config.capacity_rescue_enabled:
+        return sorted(
+            kept + removed,
+            key=lambda job_id: (
+                -_recoverability_gain(problem, diagnostics, job_id),
+                _service_rank(_visible_job(problem, job_id), diagnostics),
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                job_id,
+            ),
+        )
     return sorted(
         kept + removed,
         key=lambda job_id: (
@@ -2222,6 +2276,16 @@ def _repair_edd_spt(
     diagnostics: RGRALNSDiagnostics,
     config: RGRALNSConfig | None = None,
 ) -> list[int]:
+    if config is None or not config.capacity_rescue_enabled:
+        del diagnostics
+        return sorted(
+            kept + removed,
+            key=lambda job_id: (
+                _effective_production_deadline(problem, _visible_job(problem, job_id)),
+                _remaining_job_work(_visible_job(problem, job_id), state),
+                job_id,
+            ),
+        )
     return sorted(
         kept + removed,
         key=lambda job_id: (
@@ -2319,8 +2383,15 @@ def _insertion_cost(
     job_id: int,
     position: int,
     config: RGRALNSConfig | None,
-) -> tuple[int, int, int, float, float, int]:
+) -> tuple:
     job = _visible_job(problem, job_id)
+    if config is None or not config.capacity_rescue_enabled:
+        return (
+            _service_rank(job, diagnostics),
+            position,
+            _remaining_job_work_from_diag(job, diagnostics),
+            job_id,
+        )
     return (
         _service_rank(job, diagnostics),
         _job_rescue_chain_rank(problem, state, diagnostics, job_id),
@@ -2331,7 +2402,9 @@ def _insertion_cost(
     )
 
 
-def _tuple_cost_value(cost: tuple[int, int, int, float, float, int]) -> float:
+def _tuple_cost_value(cost: tuple) -> float:
+    if len(cost) == 4:
+        return cost[0] * 1_000_000.0 + cost[1] * 1_000.0 + cost[2] + cost[3] * 1e-6
     return (
         cost[0] * 1_000_000.0
         + cost[1] * 100_000.0

@@ -12,7 +12,9 @@ from src.algorithms.rg_ralns import (
     construct_affected_set,
     lightweight_rg_dispatch,
     _accept_candidate,
+    _capacity_rescue_penalty,
     _extract_current_feasible_operations,
+    _initial_local_order,
     _rescue_fallback_dispatch,
     _rescue_chain_rank,
     _rescue_critical_machines,
@@ -560,6 +562,85 @@ def test_rescue_critical_machine_pressure_detects_near_ready_chain():
 
     assert pressure[0] > 0
     assert 0 in critical
+
+
+def _capacity_rescue_penalty_case():
+    service = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    low = ServiceEntity(1, deadline=60, rho=0.05, weight=1.0, total_quantity=20, transport_delay=0)
+    near_ready_rescue = _multi_op_job(0, 0, 0, 5, [((1, 1),), ((0, 2),)])
+    low_competitor = _job(1, 1, 0, 1, (0, 1))
+    view = _online_view(
+        [near_ready_rescue, low_competitor],
+        [service, low],
+        [Machine(0), Machine(1)],
+        future={0: 0, 1: 10},
+    )
+    state = _state(machines=(0, 1))
+    state.ongoing_operations[(0, 0)] = ScheduledOperation(0, 0, 1, 0, 1)
+    state.machine_available_times[1] = 1
+    diagnostics = compute_recoverability_diagnostics(view, state)
+    ready = next(item for item in collect_ready_operations(view, state) if item.job_id == 1)
+    return view, state, diagnostics, ready
+
+
+def test_capacity_rescue_is_disabled_by_default():
+    assert RGRALNSConfig().capacity_rescue_enabled is False
+
+
+def test_capacity_rescue_penalty_is_inactive_when_disabled():
+    view, state, diagnostics, ready = _capacity_rescue_penalty_case()
+
+    penalty = _capacity_rescue_penalty(
+        view,
+        state,
+        diagnostics,
+        ready,
+        RGRALNSConfig(capacity_rescue_enabled=False),
+    )
+
+    assert penalty == 0.0
+
+
+def test_capacity_rescue_penalty_remains_available_when_enabled():
+    view, state, diagnostics, ready = _capacity_rescue_penalty_case()
+
+    penalty = _capacity_rescue_penalty(
+        view,
+        state,
+        diagnostics,
+        ready,
+        RGRALNSConfig(capacity_rescue_enabled=True, rescue_reservation_window=1),
+    )
+
+    assert penalty > 0.0
+
+
+def test_capacity_rescue_chain_priority_is_inactive_when_disabled():
+    early = ServiceEntity(0, deadline=20, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    late = ServiceEntity(1, deadline=60, rho=1.0, weight=1.0, total_quantity=5, transport_delay=0)
+    early_precursor = _multi_op_job(0, 0, 0, 5, [((0, 2),), ((0, 2),)])
+    late_final = _job(1, 1, 0, 5, (0, 1))
+    view = _online_view([early_precursor, late_final], [early, late], [Machine(0)], future={0: 0, 1: 0})
+    state = _state(machines=(0,))
+    diagnostics = compute_recoverability_diagnostics(view, state)
+
+    disabled_order = _initial_local_order(
+        view,
+        state,
+        diagnostics,
+        {0, 1},
+        RGRALNSConfig(capacity_rescue_enabled=False),
+    )
+    enabled_order = _initial_local_order(
+        view,
+        state,
+        diagnostics,
+        {0, 1},
+        RGRALNSConfig(capacity_rescue_enabled=True),
+    )
+
+    assert disabled_order == [0, 1]
+    assert enabled_order == [1, 0]
 
 
 def test_capacity_rescue_delays_low_risk_competitor_on_rescue_machine():

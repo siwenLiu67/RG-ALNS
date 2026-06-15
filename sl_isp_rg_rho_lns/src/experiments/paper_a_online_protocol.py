@@ -829,7 +829,7 @@ def _rg_ralns_kwargs(config: dict[str, Any], seed: int) -> dict[str, Any]:
         "tt_polish_max_moves": cfg.get("tt_polish_max_moves", 0),
         "recoverability_slack_margin": cfg.get("recoverability_slack_margin", 0.0),
         "early_rescue_trigger": cfg.get("early_rescue_trigger", False),
-        "capacity_rescue_enabled": cfg.get("capacity_rescue_enabled", True),
+        "capacity_rescue_enabled": cfg.get("capacity_rescue_enabled", False),
         "rescue_reservation_window": cfg.get("rescue_reservation_window", 1),
         "rescue_machine_pressure_threshold": cfg.get("rescue_machine_pressure_threshold", 1),
         "low_risk_on_rescue_machine_penalty": cfg.get("low_risk_on_rescue_machine_penalty", True),
