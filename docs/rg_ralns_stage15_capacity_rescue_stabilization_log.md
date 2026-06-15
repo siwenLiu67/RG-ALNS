@@ -255,4 +255,14 @@ Branch:
 codex/rg-ralns-stage15-capacity-rescue
 ```
 
-Commit hash and push status are recorded in the final response after commit/push.
+Implementation commit:
+
+```text
+247570c fix: add RG-RALNS capacity-aware rescue stabilization
+```
+
+Push status:
+
+```text
+Pending at the time this metadata section was written. Final push status is reported in the task response.
+```
