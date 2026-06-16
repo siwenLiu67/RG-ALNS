@@ -350,5 +350,5 @@ Run Stage 2 main benchmark at 60 or 90 instance-seed runs with the default RG-RA
 ## 13. Git Metadata
 
 - Branch: `codex/paper-a-stage2-pre-experiment-pipeline`
-- Commit after modification: pending at document creation time
-- Push status: pending at document creation time
+- Implementation commit: `8eae546 feat: add Paper A Stage 2 pre-experiment pipeline`
+- Push status: pending before metadata finalization
